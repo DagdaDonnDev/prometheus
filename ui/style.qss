@@ -1,0 +1,571 @@
+/* Prometheus - Dark Theme */
+
+/* ── Base ─────────────────────────────────────────────── */
+QMainWindow, QWidget {
+    background-color: #1a1a1a;
+    color: #e8e8e8;
+    font-family: "Segoe UI", "SF Pro Text", "Ubuntu", sans-serif;
+    font-size: 13px;
+}
+
+QScrollBar:vertical {
+    background: #1a1a1a;
+    width: 6px;
+    border-radius: 3px;
+}
+QScrollBar::handle:vertical {
+    background: #444;
+    border-radius: 3px;
+    min-height: 30px;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0;
+}
+QScrollBar:horizontal {
+    background: #1a1a1a;
+    height: 6px;
+}
+QScrollBar::handle:horizontal {
+    background: #444;
+    border-radius: 3px;
+}
+
+/* ── Header ───────────────────────────────────────────── */
+#header {
+    background-color: #111111;
+    border-bottom: 1px solid #2a2a2a;
+}
+
+#headerTitle {
+    color: #f0a500;
+    letter-spacing: 2px;
+}
+
+#headerBtn {
+    background-color: #2a2a2a;
+    color: #ccc;
+    border: 1px solid #333;
+    border-radius: 6px;
+    padding: 4px 8px;
+}
+#headerBtn:hover {
+    background-color: #333;
+    color: #fff;
+}
+
+/* ── Tab Bar ──────────────────────────────────────────── */
+#tabBar {
+    background-color: #141414;
+    border-bottom: 1px solid #2a2a2a;
+}
+
+#tabScroll, #tabContainer {
+    background-color: transparent;
+    border: none;
+}
+
+QScrollArea#tabScroll {
+    border: none;
+    background: transparent;
+}
+
+#tabBtn {
+    background-color: #1e1e1e;
+    color: #888;
+    border: 1px solid #2a2a2a;
+    border-radius: 6px;
+    padding: 4px 12px;
+    font-size: 12px;
+}
+#tabBtn:hover {
+    background-color: #252525;
+    color: #ccc;
+}
+#tabBtnActive, #tabBtn:checked {
+    background-color: #2a2a2a;
+    color: #f0a500;
+    border: 1px solid #f0a500;
+    border-radius: 6px;
+    padding: 4px 12px;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+#addTabBtn {
+    background-color: #1e1e1e;
+    color: #666;
+    border: 1px solid #2a2a2a;
+    border-radius: 6px;
+    font-size: 16px;
+}
+#addTabBtn:hover {
+    background-color: #252525;
+    color: #f0a500;
+}
+
+#quickAccessBtn {
+    background-color: #2a1a00;
+    color: #f0a500;
+    border: 1px solid #6a3a00;
+    border-radius: 6px;
+    font-size: 16px;
+    font-weight: bold;
+}
+#quickAccessBtn:hover {
+    background-color: #3a2a00;
+    border-color: #f0a500;
+}
+
+/* ── Chat View ────────────────────────────────────────── */
+#chatScroll, #messagesWidget {
+    background-color: #1a1a1a;
+    border: none;
+}
+
+#tabInfo {
+    background-color: #141414;
+    color: #666;
+    font-size: 11px;
+    border-bottom: 1px solid #222;
+}
+
+#summaryBar {
+    background-color: #1e1e1e;
+    color: #888;
+    border: none;
+    border-bottom: 1px solid #222;
+    text-align: left;
+    padding-left: 16px;
+    font-size: 11px;
+}
+#summaryBar:hover {
+    color: #f0a500;
+    background-color: #222;
+}
+
+/* ── Message Bubbles ──────────────────────────────────── */
+#bubble_user {
+    background-color: transparent;
+}
+#bubble_user QLabel {
+    background-color: #2a3d2a;
+    color: #d4ecd4;
+    border-radius: 12px;
+    padding: 10px 14px;
+    max-width: 600px;
+}
+
+#bubble_assistant {
+    background-color: transparent;
+}
+#bubble_assistant QLabel {
+    background-color: #1e1e1e;
+    color: #e8e8e8;
+    border-radius: 12px;
+    padding: 10px 14px;
+    max-width: 680px;
+    border: 1px solid #2a2a2a;
+}
+
+/* ── Input Bar ────────────────────────────────────────── */
+#inputBar {
+    background-color: #141414;
+    border-top: 1px solid #2a2a2a;
+}
+
+QTextEdit {
+    background-color: #1e1e1e;
+    color: #e8e8e8;
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 8px;
+    selection-background-color: #f0a500;
+    selection-color: #000;
+}
+QTextEdit:focus {
+    border: 1px solid #f0a500;
+}
+
+#sendBtn {
+    background-color: #f0a500;
+    color: #000;
+    border: none;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: bold;
+}
+#sendBtn:hover {
+    background-color: #ffb700;
+}
+#sendBtn:disabled {
+    background-color: #333;
+    color: #555;
+}
+
+#voiceBtn {
+    background-color: #1e1e1e;
+    color: #888;
+    border: 1px solid #333;
+    border-radius: 8px;
+    font-size: 18px;
+}
+#voiceBtn:hover {
+    background-color: #252525;
+    color: #e8e8e8;
+}
+#voiceBtn:checked {
+    background-color: #8b0000;
+    color: #fff;
+    border: 1px solid #cc0000;
+}
+#voiceBtn:disabled {
+    opacity: 0.4;
+}
+
+/* ── Sidebar ──────────────────────────────────────────── */
+#sidebar {
+    background-color: #141414;
+    border-left: 1px solid #2a2a2a;
+}
+
+#sidebarScroll {
+    background-color: transparent;
+    border: none;
+}
+
+#sectionHeader {
+    color: #f0a500;
+    font-size: 11px;
+    letter-spacing: 1px;
+    padding: 4px 0 2px 0;
+    text-transform: uppercase;
+}
+
+#infoRow {
+    background-color: #1a1a1a;
+    border-radius: 4px;
+    border: 1px solid #222;
+}
+
+#infoLabel {
+    color: #666;
+    font-size: 11px;
+}
+
+#infoValue {
+    color: #e8e8e8;
+    font-size: 12px;
+}
+
+#progressLabel {
+    color: #888;
+    font-size: 12px;
+    padding: 4px 8px;
+}
+
+#smallBtn {
+    background-color: #1e1e1e;
+    color: #888;
+    border: 1px solid #333;
+    border-radius: 4px;
+}
+#smallBtn:hover {
+    color: #f0a500;
+    border-color: #f0a500;
+}
+
+/* ── Dialogs ──────────────────────────────────────────── */
+QDialog {
+    background-color: #1a1a1a;
+    color: #e8e8e8;
+}
+
+QTabWidget::pane {
+    border: 1px solid #2a2a2a;
+    background-color: #1a1a1a;
+}
+
+QTabBar::tab {
+    background-color: #1e1e1e;
+    color: #888;
+    padding: 8px 16px;
+    border: 1px solid #2a2a2a;
+    border-bottom: none;
+}
+
+QTabBar::tab:selected {
+    background-color: #1a1a1a;
+    color: #f0a500;
+    border-top: 2px solid #f0a500;
+}
+
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
+    background-color: #1e1e1e;
+    color: #e8e8e8;
+    border: 1px solid #333;
+    border-radius: 6px;
+    padding: 6px 8px;
+}
+QLineEdit:focus, QComboBox:focus {
+    border: 1px solid #f0a500;
+}
+
+QComboBox::drop-down {
+    border: none;
+    width: 20px;
+}
+
+QCheckBox {
+    color: #e8e8e8;
+    spacing: 8px;
+}
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid #444;
+    border-radius: 3px;
+    background-color: #1e1e1e;
+}
+QCheckBox::indicator:checked {
+    background-color: #f0a500;
+    border-color: #f0a500;
+}
+
+QPushButton {
+    background-color: #2a2a2a;
+    color: #ccc;
+    border: 1px solid #333;
+    border-radius: 6px;
+    padding: 6px 16px;
+}
+QPushButton:hover {
+    background-color: #333;
+    color: #fff;
+}
+
+#primaryBtn {
+    background-color: #f0a500;
+    color: #000;
+    border: none;
+    font-weight: bold;
+}
+#primaryBtn:hover {
+    background-color: #ffb700;
+}
+
+#noteLabel {
+    color: #666;
+    font-size: 11px;
+    padding: 8px;
+    background-color: #1e1e1e;
+    border-radius: 6px;
+    border: 1px solid #2a2a2a;
+}
+
+/* ── Status Bar ───────────────────────────────────────── */
+QStatusBar {
+    background-color: #111;
+    color: #666;
+    font-size: 11px;
+    border-top: 1px solid #222;
+}
+
+QSplitter::handle {
+    background-color: #2a2a2a;
+}
+
+/* ── Document Context ─────────────────────────────────────── */
+#dropZone {
+    background-color: #1e1e1e;
+    border: 2px dashed #333;
+    border-radius: 8px;
+    margin: 8px 12px 0 12px;
+}
+#dropZoneActive {
+    background-color: #1a2a1a;
+    border: 2px dashed #f0a500;
+    border-radius: 8px;
+    margin: 8px 12px 0 12px;
+}
+#dropZoneLabel {
+    color: #888;
+    font-size: 13px;
+}
+#docList {
+    background-color: #1a1a1a;
+    border: 1px solid #2a2a2a;
+    color: #e8e8e8;
+    font-size: 12px;
+    padding: 4px;
+}
+#docList::item {
+    padding: 6px 8px;
+    border-radius: 4px;
+}
+#docList::item:selected {
+    background-color: #2a3a2a;
+    color: #f0a500;
+}
+#docList::item:hover {
+    background-color: #222;
+}
+#indexProgress {
+    background-color: #1a1a1a;
+    border: none;
+}
+#indexProgress::chunk {
+    background-color: #f0a500;
+}
+#assessmentWidget {
+    background-color: #1a1a1a;
+}
+
+#assessmentHeader {
+    background-color: #111;
+    border-bottom: 1px solid #2a2a2a;
+}
+
+#assessmentTitle {
+    color: #f0a500;
+    letter-spacing: 1px;
+}
+
+#assessmentProgress {
+    color: #666;
+    font-size: 12px;
+}
+
+#assessmentScroll, #assessmentNav {
+    background-color: #1a1a1a;
+    border: none;
+}
+
+#assessmentNav {
+    border-top: 1px solid #2a2a2a;
+}
+
+#progressBarBg {
+    background-color: #222;
+}
+
+#progressBarFill {
+    background-color: #f0a500;
+}
+
+#questionText {
+    color: #e8e8e8;
+}
+
+#questionSubtitle {
+    color: #888;
+    font-size: 12px;
+}
+
+#optionBtn {
+    background-color: #1e1e1e;
+    color: #e8e8e8;
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 8px 16px;
+    text-align: left;
+    font-size: 13px;
+}
+#optionBtn:hover {
+    background-color: #252525;
+    border-color: #f0a500;
+    color: #f0a500;
+}
+
+#navBtn {
+    background-color: #2a2a2a;
+    color: #ccc;
+    border: 1px solid #333;
+    border-radius: 6px;
+    padding: 6px 16px;
+}
+#navBtnSecondary {
+    background-color: transparent;
+    color: #666;
+    border: none;
+    padding: 6px 16px;
+}
+#navBtnSecondary:hover {
+    color: #999;
+}
+
+#resultsTitle {
+    color: #e8e8e8;
+}
+
+#resultsSubtitle {
+    color: #888;
+    font-size: 12px;
+}
+
+#priorityCard {
+    background-color: #1e1e1e;
+    border: 1px solid #2a2a2a;
+    border-radius: 8px;
+}
+#priorityCard:hover {
+    border-color: #f0a500;
+    background-color: #222;
+}
+
+#priorityNum {
+    background-color: #f0a500;
+    color: #000;
+    border-radius: 16px;
+    font-weight: bold;
+    font-size: 13px;
+}
+
+#priorityTitle {
+    color: #e8e8e8;
+}
+
+#priorityDetail {
+    color: #888;
+}
+
+#priorityArrow {
+    color: #f0a500;
+}
+
+#beginBtn {
+    background-color: #f0a500;
+    color: #000;
+    border: none;
+    border-radius: 8px;
+    font-weight: bold;
+    font-size: 14px;
+}
+#beginBtn:hover {
+    background-color: #ffb700;
+}
+
+/* ── Skill Tree ───────────────────────────────────────────── */
+#skillCard, #skillCardDone, #skillCardLocked {
+    background-color: #1e1e1e;
+    border: 1px solid #2a2a2a;
+    border-radius: 4px;
+}
+#skillCardDone {
+    background-color: #1a2a1a;
+    border-color: #2a4a2a;
+}
+#skillCardLocked {
+    opacity: 0.5;
+}
+#skillName {
+    color: #e8e8e8;
+    font-size: 12px;
+}
+#skillNameLocked {
+    color: #555;
+    font-size: 12px;
+}
+#skillTab {
+    color: #666;
+    font-size: 10px;
+}

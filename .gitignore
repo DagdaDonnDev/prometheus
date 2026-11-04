@@ -1,0 +1,11 @@
+﻿knowledge_base/
+memory/
+voices/
+prometheus_setup/
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.DS_Store
+Thumbs.db

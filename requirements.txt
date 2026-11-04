@@ -1,0 +1,29 @@
+# Prometheus - Core Requirements
+# Install with: pip install -r requirements.txt
+
+# UI
+PySide6>=6.6.0
+
+# LLM (Ollama runs separately - install from ollama.ai)
+requests>=2.31.0
+
+# Vector search (optional but strongly recommended)
+chromadb>=0.4.0
+sentence-transformers>=2.2.0
+
+# Speech to text (optional)
+faster-whisper>=0.10.0
+sounddevice>=0.4.6
+
+# TTS - Piper runs as separate binary
+# Install from: https://github.com/rhasspy/piper/releases
+
+# Document processing (for ingesting source materials)
+PyMuPDF>=1.23.0        # PDF extraction
+python-docx>=1.0.0     # DOCX extraction
+beautifulsoup4>=4.12.0 # HTML extraction
+lxml>=4.9.0
+
+# Utilities
+numpy>=1.24.0
+pathlib2>=2.3.7
