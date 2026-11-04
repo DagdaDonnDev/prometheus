@@ -569,3 +569,42 @@ QSplitter::handle {
     color: #666;
     font-size: 10px;
 }
+
+/* ── v22: speak-start timing stamp under each reply ── */
+#timingStamp {
+    color: #666;
+    font-size: 10px;
+    padding: 0px 0px 2px 0px;
+}
+
+/* ── v22: verdict row under a Training Path derivation ── */
+#verdictBar {
+    background: transparent;
+    border-left: 3px solid #e8a020;
+    margin-left: 32px;
+}
+
+/* ── Dev panel trace rows: colour lives in the left bar, never the text ── */
+#traceRow {
+    background-color: #1c1c1c;
+    border: 1px solid #2a2a2a;
+    border-left: 4px solid #555;
+    border-radius: 4px;
+}
+#traceRow QLabel {
+    color: #ccc;
+    font-size: 11px;
+}
+#traceMeta {
+    color: #888;
+}
+
+/* Full reset button — warning shown by its border, not its text */
+#dangerBtn {
+    background-color: #2a2a2a;
+    color: #ccc;
+    border: 1px solid #333;
+    border-left: 4px solid #ff4444;
+    border-radius: 6px;
+    padding: 6px 16px;
+}

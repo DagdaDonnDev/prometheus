@@ -77,8 +77,14 @@ class QueryTrace:
     # Layer 5: Generation
     prompt_chars:   int = 0
     response_chars: int = 0
-    response_ms:    int = 0         # generation time in ms
+    response_ms:    int = 0         # full completion time in ms (secondary)
+    first_token_ms: int = 0         # speak-start: first token / TTS start (headline)
     llm_model:      str = ""
+
+    # Query path (v22)
+    path:            str = "knowledge"   # "knowledge" or "training"
+    training_status: str = ""            # DERIVED / NEEDS_DATA / fallback reason
+    training_concept: str = ""
 
     # Outcome signals
     safe_mode_triggered: bool = False
@@ -112,7 +118,7 @@ class QueryTrace:
             f"| intent: {self.intent:<12} "
             f"| sources: {suff_emoji}{self.retrieval.total_chunks} "
             f"(top: {self.retrieval.top_score:.0f}%) "
-            f"| {self.response_ms}ms"
+            f"| 🔊 {self.first_token_ms}ms ✓ {self.response_ms}ms"
         )
 
 
@@ -157,6 +163,20 @@ class QueryTracer:
     def get_current(self) -> Optional[QueryTrace]:
         return self._current
 
+    def record_first_token(self):
+        """
+        Mark speak-start: the moment the first token arrives.
+        Tokens stream straight into Piper TTS, so this is when the
+        user starts hearing the answer. Only the first call counts.
+        """
+        t = self._current
+        if t and not t.first_token_ms:
+            t.first_token_ms = max(1, int((time.time() - t.timestamp) * 1000))
+
+    def discard(self):
+        """Drop the current trace (generation was force-stopped)."""
+        self._current = None
+
     def finish(self, response: str, model: str):
         """Finalise trace after generation."""
         if not self._current:
@@ -166,6 +186,8 @@ class QueryTracer:
         t.response_chars = len(response)
         t.llm_model = model
         t.response_ms = int((time.time() - t.timestamp) * 1000)
+        if not t.first_token_ms:
+            t.first_token_ms = t.response_ms   # whole reply arrived at once
 
         self._buffer.append(t)
 
@@ -202,6 +224,7 @@ class QueryTracer:
             return {}
 
         total = len(traces)
+        timed = [t for t in traces if t.first_token_ms]
         return {
             "total_queries":           total,
             "safe_mode_rate":          sum(1 for t in traces if t.safe_mode_triggered) / total,
@@ -210,7 +233,10 @@ class QueryTracer:
             "weak_sources_rate":       sum(1 for t in traces if t.sufficiency.verdict == "WEAK") / total,
             "conflict_rate":           sum(1 for t in traces if t.retrieval.conflict) / total,
             "tier3_usage_rate":        sum(1 for t in traces if t.retrieval.tier3_chunks > 0) / total,
+            "avg_first_token_ms":      (sum(t.first_token_ms for t in timed) / len(timed)) if timed else 0,
+            "slow_speak_start_rate":   (sum(1 for t in timed if t.first_token_ms > 800) / len(timed)) if timed else 0,
             "avg_response_ms":         sum(t.response_ms for t in traces) / total,
+            "training_path_rate":      sum(1 for t in traces if t.path == "training") / total,
             "avg_top_confidence":      sum(t.retrieval.top_score for t in traces) / total,
             "emergency_count":         sum(1 for t in traces if t.intent == "emergency"),
             "redirect_rate":           sum(1 for t in traces if t.redirect_suggested) / total,

@@ -17,6 +17,17 @@ SOURCE_TIERS = {
     "where_no_dentist":   93,
     "nuclear_survival":   92,
 
+    # Scientific reference — universal laws and constants (Training Path anchors)
+    "scientific_reference":        96,
+    "fundamental_laws_physics":    96,
+    "electronics_reference":       96,
+    "chemistry_reference":         96,
+    "mechanics_and_materials":     95,
+    "navigation_reference":        96,
+    "mathematics_reference":       97,
+    "computer_science_reference":  95,
+    "universal_constants":         97,
+
     # Historical practical — written by practitioners, pre-electricity
     "foxfire":            88,
     "survivor_library":   82,
@@ -229,6 +240,7 @@ class ConfidenceScorer:
             "plants_desert":      "Desert Plant Field Guide",
             "plants_arctic":      "Arctic Plant Field Guide",
             "companion":          "Psychological Support Resources",
+            "scientific_reference": "Scientific Reference (laws and constants)",
             "personal":           "Personal Document",
         }
         # Try exact match first, then domain, then clean up source string

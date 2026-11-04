@@ -123,6 +123,40 @@ class LLMEngine:
         except Exception as e:
             on_error(f"Error: {str(e)}")
 
+    def complete(
+        self,
+        system_prompt: str,
+        prompt: str,
+        tab_id: str = "",
+        temperature: float = 0.2,
+        max_tokens: int = 700,
+        timeout: int = 90,
+    ) -> str:
+        """
+        Blocking, non-streamed completion.
+        Used by the Training Path, which needs the whole derivation
+        before it can check it. Raises on connection or HTTP errors
+        so the caller can fall back to the Knowledge Path.
+        """
+        model = self.config.model_for_tab(tab_id) if tab_id else self.config.llm_model
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": prompt},
+            ],
+            "stream": False,
+            "options": {
+                "num_predict":    max_tokens,
+                "temperature":    temperature,
+                "top_p":          0.9,
+                "repeat_penalty": 1.1,
+            },
+        }
+        r = requests.post(f"{self.base_url}/api/chat", json=payload, timeout=timeout)
+        r.raise_for_status()
+        return r.json().get("message", {}).get("content", "")
+
     def summarize(self, conversation_text: str) -> str:
         """
         Generate a summary of conversation history.

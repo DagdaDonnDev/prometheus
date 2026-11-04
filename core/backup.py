@@ -23,6 +23,7 @@ BACKUP_TARGETS = [
     "memory/tabs.json",
     "memory/config.json",
     "memory/processed_sources.json",
+    "memory/training/graph.json",      # Training Path learning (v22)
 ]
 
 
@@ -89,6 +90,7 @@ class BackupManager:
                 src_name = Path(target).name
                 backup_file = latest / src_name
                 if backup_file.exists():
+                    Path(target).parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(backup_file, target)
 
             return True
@@ -128,6 +130,7 @@ class BackupManager:
                 src_name = Path(target).name
                 backup_file = folder / src_name
                 if backup_file.exists():
+                    Path(target).parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(backup_file, target)
             return True
         except Exception:

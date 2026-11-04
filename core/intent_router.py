@@ -70,7 +70,7 @@ DOMAIN_PARTITIONS = {
         "tier3": [],   # No Wikipedia for medical — not authoritative
     },
     "electronics": {
-        "tier1": ["electronics"],
+        "tier1": ["electronics", "scientific_reference"],
         "tier2": [
             "build", "chemistry",
             "army_fm_3_05_70", "survivor_library", "the_knowledge",
@@ -78,7 +78,7 @@ DOMAIN_PARTITIONS = {
         "tier3": ["wikipedia"],
     },
     "navigation": {
-        "tier1": ["navigation", "weather_patterns"],
+        "tier1": ["navigation", "weather_patterns", "scientific_reference"],
         "tier2": [
             "army_fm_3_05_70", "survival",
             "survivor_library",
@@ -98,7 +98,7 @@ DOMAIN_PARTITIONS = {
         "tier3": ["wikipedia"],
     },
     "build": {
-        "tier1": ["build", "blacksmithing"],
+        "tier1": ["build", "blacksmithing", "scientific_reference"],
         "tier2": [
             "electronics", "chemistry",
             "survivor_library", "the_knowledge",
@@ -107,7 +107,7 @@ DOMAIN_PARTITIONS = {
         "tier3": ["wikipedia"],
     },
     "chemistry": {
-        "tier1": ["chemistry", "blacksmithing", "soap_making"],
+        "tier1": ["chemistry", "blacksmithing", "soap_making", "scientific_reference"],
         "tier2": [
             "food_preservation", "electronics",
             "survivor_library", "the_knowledge",
@@ -199,6 +199,11 @@ STRICT_INTENTS = {Intent.DIAGNOSE, Intent.PROCEDURE, Intent.IDENTIFY}
 # Intents where discussion is appropriate (LLM can expand beyond retrieval)
 DISCUSSION_INTENTS = {Intent.DISCUSS, Intent.REFLECT, Intent.PLAN, Intent.ASSESS}
 
+# Training Path (v22) — deductive tabs where an answer can be derived
+# from first principles instead of looked up.
+TRAINING_ELIGIBLE_TABS    = {"electronics", "chemistry", "build", "navigation"}
+TRAINING_ELIGIBLE_INTENTS = {Intent.EXPLAIN, Intent.ASSESS}
+
 
 @dataclass
 class RoutingPlan:
@@ -212,6 +217,7 @@ class RoutingPlan:
     n_tier1:         int = 3       # chunks to fetch from tier 1
     n_tier2:         int = 2       # chunks to fetch from tier 2
     n_tier3:         int = 1       # chunks to fetch from tier 3
+    use_training_path: bool = False  # try first-principles derivation first
 
 
 class IntentRouter:
@@ -257,6 +263,14 @@ class IntentRouter:
         is_strict = intent in STRICT_INTENTS
         allow_disc = intent in DISCUSSION_INTENTS
 
+        # Training Path only for deductive tabs, explain/assess intents,
+        # and never for strict intents (emergency already returned above)
+        use_training = (
+            tab_id in TRAINING_ELIGIBLE_TABS and
+            intent in TRAINING_ELIGIBLE_INTENTS and
+            not is_strict
+        )
+
         return RoutingPlan(
             intent          = intent,
             tab_id          = tab_id,
@@ -268,6 +282,7 @@ class IntentRouter:
             n_tier1         = 4 if is_strict else 3,
             n_tier2         = 2,
             n_tier3         = 0 if is_strict else 1,
+            use_training_path = use_training,
         )
 
     def _classify(self, query: str, tab_id: str = "") -> Intent:

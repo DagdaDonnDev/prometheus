@@ -234,7 +234,13 @@ class Chunker:
         """Clean text for chunking."""
         import re
         text = re.sub(r'\s+', ' ', text)
-        text = re.sub(r'[^\w\s.,;:!?\'\"()\-/°%]+', ' ', text)
+        # Keep maths and units (=, +, ×, ², ≈, Ω …) — formulas are knowledge.
+        # Only strip markup and decoration (#, *, |, `, ~, bullets, emoji).
+        text = re.sub(
+            r'[^\w\s.,;:!?\'\"()\[\]\-/°%=+×·⋅*^<>²³¹⁰⁴⁵⁶⁷⁸⁹⁻₀₁₂₃₄₅₆₇₈₉'
+            r'≈≤≥±√π½¼¾−→←↔≠∞Ωµμ∆Δ∑θφλστ]+',
+            ' ', text
+        )
         text = re.sub(r' +', ' ', text)
         return text.strip()
 
@@ -326,6 +332,8 @@ class Ingester:
                     ".txt", ".md", ".pdf", ".html", ".htm", ".json"
                 ):
                     continue
+                if file_path.name == "README.md":
+                    continue   # folder placeholder, not knowledge
 
                 file_hash = self._file_hash(file_path)
                 if file_hash in self.processed and not self.rebuild:
@@ -490,6 +498,7 @@ def create_sample_knowledge_base():
         "build": "Construction, tools, fabrication from raw materials",
         "chemistry": "Materials science, metallurgy, chemistry fundamentals",
         "companion": "Philosophy, psychology, meaning, human connection",
+        "scientific_reference": "Universal laws and constants — Training Path anchor source",
         "reasoning": "Critical thinking frameworks, decision making under uncertainty",
         "plants_temperate": "Edible and medicinal plants — temperate biome",
         "plants_tropical": "Edible and medicinal plants — tropical biome",

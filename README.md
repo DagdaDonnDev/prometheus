@@ -31,6 +31,19 @@ A self-contained AI assistant that works when everything else fails. Built for o
 
 ## Quick Start
 
+### Fastest — one script does it all
+```bash
+# Windows: double-click setup.bat
+# Linux / macOS / Raspberry Pi:
+bash setup.sh
+```
+Both scripts check Python 3.9+ and pip, check for Ollama (Windows opens the
+download page, Linux/macOS installs it), pull `llama3.2:3b`, install
+requirements, index the knowledge base, then offer to launch.
+Downloading the full source library (`bootstrap.py`, ~2GB) stays a separate step.
+
+Or step by step:
+
 ### 1. Install Ollama
 ```bash
 # Linux/Mac
@@ -178,9 +191,17 @@ python ingest.py --wikipedia simplewiki-latest-articles.xml.bz2 --max-articles 5
 | + 15 more sources | various | Public Domain |
 
 ### Pre-Populated Knowledge (No Download Needed)
-Already written and included in the repository:
+Included in the repository:
 
-| File | Contents |
+| Folder | Contents |
+|--------|---------|
+| `scientific_reference/` | 8 files of universal laws and constants — physics, electronics, chemistry, mechanics and materials, navigation, mathematics, computer science, constants. The anchor source for the Training Path. |
+
+Written for earlier builds but **not currently in the repository** (the
+`knowledge_base/` folder used to be git-ignored, so these were never committed —
+they need rewriting or restoring from a local copy):
+
+| Folder | Contents |
 |------|---------|
 | `water_purification/` | Ceramic pot filter, bio-sand filter, solar still, SODIS, chemical treatment — full build instructions |
 | `emergency_medicine/` | Trauma, bleeding, fractures, burns, shock, wound closure, childbirth, improvised medicines |
@@ -226,6 +247,53 @@ in a separate ChromaDB collection — fully independent from the main library.
 | 💬 Prometheus | Companion, philosophy, psychology, meaning, memory |
 | ➕ Custom | Create tabs for your specific situation |
 
+### Training Path — working things out from first principles
+In the ⚡ Electronics, ⚗️ Chemistry, 🔧 Build and 🌍 Navigate tabs, "explain"
+and "should I / which is better" questions first try to **derive** the answer
+instead of looking it up.
+
+- 38 concepts in a 3-tier graph: tier 1 laws (Ohm's law, F = ma, PV = nRT,
+  Earth's rotation…) are locked; tier 2 is one step from a law (P = VI,
+  Kirchhoff's laws, n = m/M, σ = F/A, latitude from Polaris…); tier 3 builds on
+  tier 2 (voltage divider, stoichiometry, beam bending, great-circle distance…).
+- **Anchor rule:** every derivation must rest on text found in
+  `knowledge_base/scientific_reference/`, never on the model's memory. If the
+  law is missing from the library, Prometheus says so and answers from the
+  library instead.
+- The model is asked for three independent methods. Each is checked: the result
+  must have the right form, must be reached rather than stated up front, must use
+  a given foundation, and must not contradict a tier-1 law.
+- Under each derivation: **Right / Not quite / Wrong / Contradicts a source**.
+  Only your answers move a concept's trust. After 3 confirmations at 80%+
+  it becomes a trusted result. "Contradicts a source" puts it on hold and
+  lowers trust in everything built on it.
+- A tier-3 concept needs its building blocks trained first. If they aren't,
+  Prometheus answers from the library and tells you which ones to ask about.
+- If a calculation needs numbers you didn't give, it asks for them.
+- Learning is saved in `memory/training/` and included in backups.
+
+### Speak-start timing
+Replies stream straight into the voice, so you hear an answer as soon as the
+first words arrive. Each reply shows a small stamp, e.g. `↳ 🔊 420ms  ✓ 1830ms`:
+🔊 is speak-start (the number that matters), ✓ is full completion.
+
+### Dev Panel (Ctrl+D)
+- **Live Traces** — every query: mode (left bar colour), lookup or derive,
+  sources, 🔊 speak-start (bar: green under 500ms, amber under 800ms, red above),
+  ✓ full time, tab.
+- **Patterns** — averages and rates, flags speak-start above 800ms.
+- **Eval** — runs the 22 decision-layer checks and the 19 Training Path tests.
+- **Training** — every concept, its tier, confidence, and status; release a
+  concept that is on hold.
+
+### Keyboard
+| Key | Action |
+|-----|--------|
+| Enter | Send |
+| Shift+Enter | New line |
+| Escape or ⏹ | Stop the current answer immediately |
+| Ctrl+D | Dev Panel |
+
 ### Header Controls
 | Control | Function |
 |---------|---------|
@@ -236,6 +304,7 @@ in a separate ChromaDB collection — fully independent from the main library.
 | **📎** | Add personal documents as searchable context |
 | **🖨️** | Generate printable 6-page emergency reference PDF |
 | **⚙** | Settings (model, voice, identity) |
+| **↺** | Reset — clear one tab, all tabs, user memory, or everything (backup saved first) |
 
 ### Quick Access Panel
 16 pre-wired critical actions across 4 sections. Tap any button — it navigates
@@ -341,6 +410,11 @@ python ingest.py --wikipedia FILE.xml.bz2 --max-articles 50000
 python ingest.py --init                           # create folder structure only
 ```
 
+**Upgrading from v19 or earlier:** run `python ingest.py` once. It indexes the new
+`scientific_reference/` folder (needed by the Training Path) and, with the v22
+cleaner, keeps formulas intact (`=`, `+`, `×`, `²` used to be stripped). For the
+formula fix to apply to sources indexed earlier, run `python ingest.py --rebuild`.
+
 ---
 
 ## Project Structure
@@ -348,42 +422,68 @@ python ingest.py --init                           # create folder structure only
 ```
 prometheus/
 ├── main.py                    # Entry point
+├── setup.bat / setup.sh       # One-step install (Windows / Linux, macOS, Pi)
 ├── bootstrap.py               # One-time downloader (self-deletes after use)
+├── bootstrap_map.py           # Offline map data downloader
 ├── ingest.py                  # Knowledge base indexing pipeline
 ├── generate_reference.py      # Printable emergency PDF generator
 ├── build_exe.py               # EXE builder (Windows/Linux/Mac)
 ├── build_apk.py               # APK builder (Android)
 ├── requirements.txt
 ├── README.md
+├── CLAUDE.md                  # Working notes for AI-assisted development
 │
 ├── core/
+│   ├── intent_router.py       # 10 intents, domain tiers, Training Path flag
+│   ├── rag.py                 # Tiered knowledge search, image lookup
+│   ├── sufficiency_gate.py    # SUFFICIENT / WEAK / CONFLICTING / NONE
+│   ├── contradiction.py       # Opposing-claim and numeric conflict checks
+│   ├── decision_gate.py       # EMERGENCY / SAFE_MODE / CLARIFY / CAUTIOUS / DIRECT
+│   ├── llm_bounds.py          # Per-tab constraints, companion personality
+│   ├── memory_filter.py       # Only the most relevant memory goes in the prompt
+│   ├── llm.py                 # Ollama streaming, intent temperatures, prompt order
+│   ├── tracer.py              # Query traces, speak-start + full timing
+│   ├── eval_harness.py        # 22 deterministic decision-layer checks
+│   ├── training/              # Training Path
+│   │   ├── axiom_seeds.py     #   38 concepts: laws, direct and composite results
+│   │   ├── graph.py           #   Confidence DAG, caps, quarantine, lemmas
+│   │   ├── engine.py          #   Anchors, derivation, checks, gap types
+│   │   └── session.py         #   Your verdicts, trusted-result promotion
 │   ├── backup.py              # Automatic backup and restore
 │   ├── confidence.py          # Source confidence scoring + redundancy checking
-│   ├── config.py              # Settings
+│   ├── config.py              # Settings, model per tab
 │   ├── context_manager.py     # Rolling conversation summaries
-│   ├── llm.py                 # Llama 3.2 3B via Ollama (token streaming)
+│   ├── map_engine.py          # Offline maps, biome and resource context
 │   ├── memory.py              # Persistent user state
-│   ├── rag.py                 # Knowledge search (vector + keyword + personal docs)
+│   ├── p2p.py                 # Local-network messaging
 │   ├── stt.py                 # Faster-Whisper speech-to-text
 │   ├── tabs.py                # Tab definitions and management
-│   └── tts.py                 # Piper text-to-speech (streaming)
+│   ├── tts.py                 # Piper text-to-speech (streaming)
+│   └── voice_manager.py       # Voice model management
 │
 ├── ui/
+│   ├── main_window.py         # Window, query fork, both paths
+│   ├── workers.py             # LLMWorker, TrainingWorker, InitWorker
+│   ├── chat_view.py           # Messages, timing stamp, verdict row, images
+│   ├── dev_panel.py           # Ctrl+D observability
 │   ├── assessment.py          # Situation assessment mode
-│   ├── chat_view.py           # Streaming message display
 │   ├── doc_context.py         # Personal document manager
-│   ├── input_bar.py           # Text and voice input
-│   ├── main_window.py         # Main application window
+│   ├── input_bar.py           # Text and voice input, stop button
+│   ├── map_view.py            # Offline map
+│   ├── messages_view.py       # Local-network messages
 │   ├── quick_access.py        # 16-button critical action panel
 │   ├── settings_dialog.py     # Settings dialog
 │   ├── sidebar.py             # Situation panel
 │   ├── skill_tree.py          # Civilisation rebuild tracker
 │   ├── style.qss              # Dark amber theme
-│   ├── tab_bar.py             # Tab navigation
-│   └── workers.py             # Background threads
+│   └── tab_bar.py             # Tab navigation
+│
+├── tests/
+│   └── test_training.py       # python -m unittest discover tests
 │
 ├── knowledge_base/            # Populated by bootstrap.py + ingest.py
-│   ├── [28 domain folders]
+│   ├── scientific_reference/  # In the repo — Training Path anchors
+│   ├── [28 more domain folders]
 │   └── wikipedia/             # Optional — populated separately
 │
 ├── voices/                    # Piper voice models (.onnx + .json)
@@ -392,13 +492,22 @@ prometheus/
     ├── config.json
     ├── user_memory.json
     ├── tabs.json
-    ├── personal_docs_index.json
+    ├── training/              # graph.json (learning), history.json (attempts)
+    ├── query_traces.jsonl     # Every query trace, incl. speak-start
     ├── backups/               # Rolling backups — last 30
     ├── personal_docs/         # Uploaded personal documents
     ├── personal_chroma_db/    # Personal document vectors
     ├── chroma_db/             # Main knowledge base vectors
     └── model_cache/           # Embedding model cache
 ```
+
+## Testing
+
+```bash
+python -m unittest discover tests                                  # Training Path
+python -c "from core.eval_harness import EvalHarness; EvalHarness().run_all()"   # decision layers
+```
+Both also run from the Dev Panel → Eval. Neither needs Ollama.
 
 ---
 

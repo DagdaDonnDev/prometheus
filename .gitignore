@@ -1,4 +1,5 @@
-﻿knowledge_base/
+knowledge_base/*
+!knowledge_base/scientific_reference/
 memory/
 voices/
 prometheus_setup/

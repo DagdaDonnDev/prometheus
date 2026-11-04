@@ -38,6 +38,43 @@ class LLMWorker(QThread):
         )
 
 
+class TrainingWorker(QThread):
+    """
+    Runs the Training Path (first-principles derivation) off the UI thread.
+    The derivation call can take up to 90 seconds on slow hardware —
+    doing it on the Qt main thread froze the app (the v22 fix).
+
+    Signals:
+      derivation_done(dict)     DERIVED or NEEDS_DATA — show it
+      fallback_requested(str)   use the Knowledge Path instead (reason given)
+      derivation_error(str)     engine or Ollama failed — also falls back
+    """
+    derivation_done    = Signal(dict)
+    fallback_requested = Signal(str)
+    derivation_error   = Signal(str)
+
+    SHOW_STATUSES = {"DERIVED", "NEEDS_DATA"}
+
+    def __init__(self, engine, query: str, tab_id: str):
+        super().__init__()
+        self.engine = engine
+        self.query  = query
+        self.tab_id = tab_id
+
+    def run(self):
+        try:
+            result = self.engine.run(self.query, self.tab_id)
+        except Exception as e:
+            self.derivation_error.emit(str(e))
+            return
+
+        if result.get("status") in self.SHOW_STATUSES:
+            self.derivation_done.emit(result)
+        else:
+            reason = result.get("reason", "")
+            self.fallback_requested.emit(f"{result.get('status', '')}|{reason}")
+
+
 class InitWorker(QThread):
     """Initializes heavy components (RAG, STT) in background."""
     status_update = Signal(str)

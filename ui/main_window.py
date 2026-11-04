@@ -29,7 +29,7 @@ from ui.tab_bar import TabBar
 from ui.chat_view import ChatView
 from ui.input_bar import InputBar
 from ui.sidebar import Sidebar
-from ui.workers import LLMWorker, InitWorker
+from ui.workers import LLMWorker, InitWorker, TrainingWorker
 from ui.assessment import AssessmentWidget
 from ui.skill_tree import SkillTreeWidget
 from ui.quick_access import QuickAccessWidget
@@ -48,6 +48,7 @@ from core.contradiction import ContradictionDetector
 from core.memory_filter import MemoryRelevanceFilter
 from core.tracer import tracer
 from ui.dev_panel import DevPanel
+from core.training import TrainingGraph, DerivationEngine, TrainingSession, VERDICT_LABELS
 
 
 class MainWindow(QMainWindow):
@@ -73,6 +74,11 @@ class MainWindow(QMainWindow):
         self.p2p           = P2PEngine(self.memory)
         self.p2p.start()
 
+        # Training Path (v22) — first-principles derivation for deductive tabs
+        self.training_graph   = TrainingGraph()
+        self.training_engine  = DerivationEngine(self.training_graph, self.knowledge, self.llm)
+        self.training_session = TrainingSession(self.training_graph)
+
         # Verify memory files on startup — restore from backup if broken
         ok, broken = self.backup.verify_primary_files()
         if not ok:
@@ -81,6 +87,8 @@ class MainWindow(QMainWindow):
         # State
         self._generating = False
         self._llm_worker: Optional[LLMWorker] = None
+        self._training_worker: Optional[TrainingWorker] = None
+        self._generation_id = 0   # bumped on every query and on force-stop
 
         self._setup_ui()
         self._setup_shortcuts()
@@ -245,13 +253,14 @@ class MainWindow(QMainWindow):
         self.splitter.setStretchFactor(0, 1)
         self.splitter.setStretchFactor(1, 0)
 
-        main_layout.addWidget(self.splitter)
+        main_layout.addWidget(self.splitter, 1)   # chat takes all spare height
 
         # Input bar
         self.input_bar = InputBar(self.stt)
         self.input_bar.message_submitted.connect(self._on_send)
         self.input_bar.voice_toggled.connect(self._on_voice_toggle)
         self.input_bar.stop_requested.connect(self._force_stop)
+        self.input_bar.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         main_layout.addWidget(self.input_bar)
 
         # Status bar
@@ -371,7 +380,7 @@ class MainWindow(QMainWindow):
         dialog.resize(900, 600)
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(0, 0, 0, 0)
-        panel = DevPanel(dialog)
+        panel = DevPanel(dialog, training_graph=self.training_graph)
         panel.closed.connect(dialog.accept)
         layout.addWidget(panel)
         dialog.exec()
@@ -516,18 +525,115 @@ class MainWindow(QMainWindow):
             )
 
     def _generate_response(self, tab: Tab, user_input: str):
+        """
+        Entry point for every query.
+        Routes the intent, then forks:
+          Training Path  — deductive tabs, explain/assess intents (derive it)
+          Knowledge Path — everything else (look it up, 11 steps)
+        """
         self._generating = True
+        self._generation_id += 1
         self.input_bar.set_generating(True)
         self.tts.stop()
 
-        # ── Start trace ────────────────────────────────────────────────────
-        trace = tracer.start(user_input, tab.id)
+        try:
+            # ── Start trace ────────────────────────────────────────────────
+            trace = tracer.start(user_input, tab.id)
 
-        # ── Step 1: Intent routing ─────────────────────────────────────────
-        routing_plan = self.router.route(user_input, tab.id)
-        trace.intent          = routing_plan.intent.value
-        trace.is_strict       = routing_plan.is_strict
-        trace.allow_discussion = routing_plan.allow_discussion
+            # ── Intent routing ─────────────────────────────────────────────
+            routing_plan = self.router.route(user_input, tab.id)
+            trace.intent           = routing_plan.intent.value
+            trace.is_strict        = routing_plan.is_strict
+            trace.allow_discussion = routing_plan.allow_discussion
+
+            # ── Fork ───────────────────────────────────────────────────────
+            if routing_plan.use_training_path:
+                self._run_training_path(tab, user_input, routing_plan, trace)
+            else:
+                self._run_knowledge_path(tab, user_input, routing_plan, trace)
+
+        except Exception as e:
+            # Never leave the input locked if something above throws
+            self._end_generation()
+            self.chat_view.add_error(f"Something went wrong preparing the answer: {e}")
+
+    # ── Training Path ──────────────────────────────────────────────────────
+
+    def _run_training_path(self, tab: Tab, user_input: str, routing_plan, trace):
+        """Derive from first principles on a worker thread (never block Qt)."""
+        trace.path = "training"
+        self.status_bar.showMessage("🧮 Working it out from first principles…", 0)
+        gen_id = self._generation_id
+
+        self._training_worker = TrainingWorker(self.training_engine, user_input, tab.id)
+        self._training_worker.derivation_done.connect(
+            lambda result: self._on_derivation_done(gen_id, tab, result)
+        )
+        self._training_worker.fallback_requested.connect(
+            lambda why: self._on_training_fallback(gen_id, tab, user_input, routing_plan, trace, why)
+        )
+        self._training_worker.derivation_error.connect(
+            lambda err: self._on_training_fallback(
+                gen_id, tab, user_input, routing_plan, trace, f"ERROR|{err}")
+        )
+        self._training_worker.start()
+
+    def _on_derivation_done(self, gen_id: int, tab: Tab, result: dict):
+        if gen_id != self._generation_id:
+            return   # stopped or superseded
+        trace = tracer.get_current()
+        if trace:
+            trace.training_status  = result.get("status", "")
+            trace.training_concept = result.get("concept_id", "")
+            trace.gate_mode        = "direct"
+
+        text = result.get("text", "")
+        self.status_bar.showMessage("", 0)
+        self.chat_view.start_assistant_message()
+        self._on_token(text)          # records speak-start and feeds the voice
+        self.tts.flush()
+
+        timing = self._finish_trace(text, tab)
+        self.chat_view.finish_assistant_message(**timing)
+        tab.add_message("assistant", text)
+        self.tab_manager.save()
+
+        # Ask for a verdict — only confirmed successes build trust
+        if result.get("status") == "DERIVED":
+            self.training_session.remember(tab.id, result)
+            self.chat_view.add_verdict_bar(
+                VERDICT_LABELS,
+                lambda verdict, tid=tab.id: self._on_verdict(tid, verdict),
+            )
+        self._end_generation()
+
+    def _on_verdict(self, tab_id: str, verdict: str):
+        msg = self.training_session.apply_verdict(tab_id, verdict)
+        if msg:
+            self.status_bar.showMessage(msg, 6000)
+
+    def _on_training_fallback(self, gen_id: int, tab: Tab, user_input: str,
+                              routing_plan, trace, why: str):
+        """Derivation not possible — answer from the library instead."""
+        if gen_id != self._generation_id:
+            return
+        status, _, reason = why.partition("|")
+        trace.path = "knowledge"
+        trace.training_status = f"fallback: {status}"
+        self.status_bar.showMessage("", 0)
+        if reason and status != "NO_MATCH":
+            # Shown in the chat so it isn't lost when the status bar updates
+            self.chat_view.add_note(f"🧮 {reason} Answer below is from the library.")
+        try:
+            self._run_knowledge_path(tab, user_input, routing_plan, trace)
+        except Exception as e:
+            self._end_generation()
+            self.chat_view.add_error(f"Something went wrong preparing the answer: {e}")
+
+    # ── Knowledge Path ─────────────────────────────────────────────────────
+
+    def _run_knowledge_path(self, tab: Tab, user_input: str, routing_plan, trace):
+        """The 11-step retrieval pipeline (steps 1–2 ran in _generate_response)."""
 
         # ── Step 2: Tiered RAG retrieval ───────────────────────────────────
         knowledge_context, confidence_note = self.knowledge.search(
@@ -643,13 +749,13 @@ class MainWindow(QMainWindow):
                 + questions
             )
             self.chat_view.start_assistant_message()
-            self.chat_view.append_token(clarify_response)
-            self.chat_view.finish_assistant_message()
+            self._on_token(clarify_response)
+            self.tts.flush()
+            timing = self._finish_trace(clarify_response, tab)
+            self.chat_view.finish_assistant_message(**timing)
             tab.add_message("assistant", clarify_response)
             self.tab_manager.save()
-            tracer.finish(clarify_response, self.config.model_for_tab(tab.id))
-            self._generating = False
-            self.input_bar.set_generating(False)
+            self._end_generation()
             return
 
         # ── Step 11: Stream response ───────────────────────────────────────
@@ -701,20 +807,34 @@ class MainWindow(QMainWindow):
 
     def _on_token(self, token: str):
         """Handle incoming token from LLM stream."""
+        tracer.record_first_token()   # speak-start — only the first call counts
         self.chat_view.append_token(token)
         self.tts.on_token(token)
+
+    def _finish_trace(self, response: str, tab: Tab) -> dict:
+        """Close the trace and return its timing for the chat stamp."""
+        trace = tracer.get_current()
+        tracer.finish(response, self.config.model_for_tab(tab.id))
+        if not trace:
+            return {}
+        return {"first_token_ms": trace.first_token_ms, "response_ms": trace.response_ms}
+
+    def _end_generation(self):
+        self._generating = False
+        self.input_bar.set_generating(False)
 
     def _on_response_done(self, tab: Tab, full_response: str):
         self.tts.flush()
         images = self.knowledge.get_last_images()
-        self.chat_view.finish_assistant_message(image_paths=images if images else None)
+        timing = self._finish_trace(full_response, tab)
+        self.chat_view.finish_assistant_message(
+            image_paths=images if images else None, **timing
+        )
         tab.add_message("assistant", full_response)
-        tracer.finish(full_response, self.config.model_for_tab(tab.id))
         if self.context_mgr.should_summarize(tab):
             QTimer.singleShot(1000, lambda: self._background_summarize(tab))
         self.tab_manager.save()
-        self._generating = False
-        self.input_bar.set_generating(False)
+        self._end_generation()
         self.status_bar.showMessage("", 0)
 
     def _background_summarize(self, tab: Tab):
@@ -723,10 +843,10 @@ class MainWindow(QMainWindow):
         self.tab_manager.save()
 
     def _on_error(self, error: str):
+        tracer.discard()
         self.chat_view.finish_assistant_message()
         self.chat_view.add_error(error)
-        self._generating = False
-        self.input_bar.set_generating(False)
+        self._end_generation()
 
     def _on_voice_toggle(self, recording: bool):
         if recording:
@@ -766,10 +886,17 @@ class MainWindow(QMainWindow):
         Resets all state. Used when model is stuck or
         user wants to abort a response in progress.
         """
-        # Kill the LLM worker thread
+        # Ignore any late signals from the stopped query
+        self._generation_id += 1
+
+        # Kill the LLM and training worker threads
         if self._llm_worker and self._llm_worker.isRunning():
             self._llm_worker.terminate()
             self._llm_worker.wait(500)
+        if self._training_worker and self._training_worker.isRunning():
+            self._training_worker.terminate()
+            self._training_worker.wait(500)
+        tracer.discard()
 
         # Clear TTS queue and stop speech
         self.tts.stop()
@@ -833,8 +960,7 @@ class MainWindow(QMainWindow):
 
         # Nuclear — everything
         reset_all_btn = QPushButton("☢  Full reset — wipe everything")
-        reset_all_btn.setObjectName("navBtn")
-        reset_all_btn.setStyleSheet("color: #ff4444; border-color: #ff4444;")
+        reset_all_btn.setObjectName("dangerBtn")
         reset_all_btn.clicked.connect(lambda: self._reset_everything(dialog))
         layout.addWidget(reset_all_btn)
 
@@ -899,7 +1025,8 @@ class MainWindow(QMainWindow):
         """Full reset — memory, all conversations, situation."""
         reply = QMessageBox.question(
             self, "Full reset",
-            "⚠ This wipes all memory, all conversations, and all situation data.\n\n"
+            "⚠ This wipes all memory, all conversations, all situation data,\n"
+            "and everything the Training Path has learned.\n\n"
             "A backup will be saved first. Continue?",
             QMessageBox.Yes | QMessageBox.No
         )
@@ -907,6 +1034,7 @@ class MainWindow(QMainWindow):
             return
         self.backup.backup(label="pre_full_reset")
         self.memory.reset()
+        self.training_graph.reset()
         for tab in self.tab_manager.tabs:
             self.tab_manager.clear_tab(tab.id)
         tab = self.tab_manager.get_active_tab()
@@ -919,6 +1047,8 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("✓ Full reset complete", 3000)
         # Offer assessment on full reset
         QTimer.singleShot(800, self._show_assessment)
+
+    def _toggle_sidebar(self):
         visible = self.sidebar.isVisible()
         self.sidebar.setVisible(not visible)
         self._sidebar_btn.setText("▶ Info" if visible else "◀ Info")

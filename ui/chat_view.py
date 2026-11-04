@@ -245,12 +245,26 @@ class ChatView(QWidget):
             self._current_bubble.append_text(token)
             self._scroll_to_bottom()
 
-    def finish_assistant_message(self, image_paths: List[str] = None):
+    def finish_assistant_message(self, image_paths: List[str] = None,
+                                 first_token_ms: int = 0, response_ms: int = 0):
         """
         Mark current streaming message as complete.
         If image_paths provided, attach an image panel below the bubble.
+        If timing is given, add a small stamp: speak-start first, full time second.
         """
         self._current_bubble = None
+
+        if first_token_ms:
+            stamp_text = f"↳ 🔊 {first_token_ms}ms"
+            if response_ms and response_ms != first_token_ms:
+                stamp_text += f"   ✓ {response_ms}ms"
+            stamp = QLabel(stamp_text)
+            stamp.setObjectName("timingStamp")
+            stamp.setContentsMargins(40, 0, 0, 0)
+            stamp.setToolTip("🔊 when you started hearing the reply · ✓ when it finished")
+            self._messages_layout.insertWidget(
+                self._messages_layout.count() - 1, stamp
+            )
         if self._current_tab and self._current_tab.summary:
             self._summary_bar.show()
 
@@ -261,6 +275,53 @@ class ChatView(QWidget):
                 self._messages_layout.count() - 1, panel
             )
             QTimer.singleShot(50, self._scroll_to_bottom)
+
+    def add_verdict_bar(self, options: dict, on_choice):
+        """
+        Row of buttons under a derivation asking whether it was right.
+        options: {verdict_key: button label}. on_choice(verdict_key) is called
+        once, then the row replaces itself with a short note.
+        """
+        bar = QFrame()
+        bar.setObjectName("verdictBar")
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(40, 2, 8, 2)
+        row.setSpacing(6)
+
+        prompt = QLabel("Was this right?")
+        prompt.setObjectName("infoLabel")
+        row.addWidget(prompt)
+
+        def choose(key):
+            for i in reversed(range(row.count())):
+                w = row.itemAt(i).widget()
+                if w:
+                    w.deleteLater()
+            done = QLabel(f"Marked: {options[key]}")
+            done.setObjectName("infoLabel")
+            row.addWidget(done)
+            row.addStretch()
+            on_choice(key)
+
+        for key, label in options.items():
+            btn = QPushButton(label)
+            btn.setObjectName("navBtn")
+            btn.setFixedHeight(26)
+            btn.clicked.connect(lambda _=False, k=key: choose(k))
+            row.addWidget(btn)
+        row.addStretch()
+
+        self._messages_layout.insertWidget(self._messages_layout.count() - 1, bar)
+        QTimer.singleShot(50, self._scroll_to_bottom)
+
+    def add_note(self, text: str):
+        """Small neutral note between messages (e.g. why a derivation fell back)."""
+        note = QLabel(text)
+        note.setObjectName("timingStamp")
+        note.setWordWrap(True)
+        note.setContentsMargins(40, 2, 8, 2)
+        self._messages_layout.insertWidget(self._messages_layout.count() - 1, note)
+        QTimer.singleShot(50, self._scroll_to_bottom)
 
     def add_error(self, error: str):
         bubble = MessageBubble("assistant", f"⚠ {error}")
