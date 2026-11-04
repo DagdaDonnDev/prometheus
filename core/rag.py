@@ -27,7 +27,8 @@ class KnowledgeBase:
         self._fallback_chunks: List[Dict] = []
         self._personal       = None
         self._last_scores    = {}
-        self._last_raw_chunks: List[Dict] = []   # cached for sufficiency gate
+        self._last_raw_chunks: List[Dict] = []
+        self._last_images:   List[str] = []   # image paths from last search
         self._load_fallback()
 
     def _init_personal_searcher(self):
@@ -281,6 +282,7 @@ class KnowledgeBase:
                 "conflict": False,
                 "has_sources": False,
             }
+            self._last_images = []
             return (
                 "",
                 "NO SOURCES FOUND: No relevant knowledge retrieved for this query. "
@@ -292,15 +294,15 @@ class KnowledgeBase:
         scored = []
         for r in raw_results:
             conf = self.scorer.score_chunk(r["content"], r["source"])
-            # Tier 1 results get a score boost — they are more trusted
+            tier = "tier2"
             if tier_map:
-                key = r["content"][:50]
+                key  = r["content"][:50]
                 tier = tier_map.get(key, "tier2")
                 if tier == "tier1":
                     conf["score"] = min(100, conf["score"] + 15)
                 elif tier == "tier3":
                     conf["score"] = max(0, conf["score"] - 10)
-            scored.append({**r, "confidence": conf})
+            scored.append({**r, "confidence": conf, "_tier": tier})
 
         # Sort: tier1 boosted scores first
         scored.sort(key=lambda x: x["confidence"]["score"], reverse=True)
@@ -325,14 +327,22 @@ class KnowledgeBase:
             "conflict":      conflict,
             "has_sources":   True,
         }
-        self._last_raw_chunks = scored   # cache for sufficiency gate
+        self._last_raw_chunks = scored
+        # Collect unique image paths from top results
+        self._last_images = list(dict.fromkeys(
+            r["image_path"] for r in scored[:n_results]
+            if r.get("image_path")
+        ))
 
         context = self.scorer.format_for_prompt(scored[:n_results])
         return context, confidence_note
 
     def get_last_scores(self) -> dict:
-        """Return cached score metadata from most recent search."""
         return self._last_scores
+
+    def get_last_images(self) -> List[str]:
+        """Return image paths from the most recent search."""
+        return self._last_images
 
     def _vector_search(
         self,
@@ -360,15 +370,50 @@ class KnowledgeBase:
                 results["documents"][0],
                 results["metadatas"][0]
             ):
-                chunks.append({
+                chunk = {
                     "content": doc,
                     "source": meta.get("source", "unknown"),
-                    "domain": meta.get("domain", "general")
-                })
+                    "domain": meta.get("domain", "general"),
+                    "page_num": meta.get("page_num", 0),
+                }
+                # Resolve image path if available
+                img = self._resolve_image(chunk)
+                if img:
+                    chunk["image_path"] = str(img)
+                chunks.append(chunk)
             return chunks
 
         except Exception:
             return self._keyword_search(query, domains, n)
+
+    def _resolve_image(self, chunk: Dict) -> Optional[Path]:
+        """
+        Look up the page image for a chunk.
+        Returns Path if image exists, None otherwise.
+        """
+        page_num = chunk.get("page_num", 0)
+        if not page_num:
+            return None
+
+        domain = chunk.get("domain", "")
+        source = chunk.get("source", "")
+
+        # Domains where images are extracted during ingest
+        # Must stay in sync with IMAGE_ELIGIBLE_DOMAINS in ingest.py
+        IMAGE_ELIGIBLE_DOMAINS = {
+            "plants_temperate", "plants_tropical", "plants_desert", "plants_arctic",
+            "medical", "emergency_medicine", "where_no_doctor", "where_no_dentist",
+            "blacksmithing", "electronics", "build", "navigation",
+        }
+
+        if domain not in IMAGE_ELIGIBLE_DOMAINS:
+            return None
+
+        img_path = (
+            Path("knowledge_base") / domain / "_images" /
+            f"{source}_p{page_num:03d}.jpg"
+        )
+        return img_path if img_path.exists() else None
 
     def _keyword_search(
         self,

@@ -42,6 +42,7 @@ class ExpandingTextEdit(QTextEdit):
 class InputBar(QFrame):
     message_submitted = Signal(str)
     voice_toggled = Signal(bool)
+    stop_requested = Signal()       # emitted when user hits stop during generation
 
     def __init__(self, stt: STTEngine, parent=None):
         super().__init__(parent)
@@ -70,17 +71,23 @@ class InputBar(QFrame):
         self._voice_btn.clicked.connect(self._on_voice_click)
         layout.addWidget(self._voice_btn)
 
-        # Send button
+        # Send / Stop button
         self._send_btn = QPushButton("➤")
         self._send_btn.setObjectName("sendBtn")
         self._send_btn.setFixedSize(44, 44)
-        self._send_btn.clicked.connect(self.submit)
+        self._send_btn.clicked.connect(self._on_send_or_stop)
         layout.addWidget(self._send_btn)
 
         # Hide voice if STT not available
         if not stt.available:
             self._voice_btn.setEnabled(False)
             self._voice_btn.setToolTip("Install faster-whisper for voice input")
+
+    def _on_send_or_stop(self):
+        if self._generating:
+            self.stop_requested.emit()
+        else:
+            self.submit()
 
     def submit(self):
         if self._generating:
@@ -99,8 +106,9 @@ class InputBar(QFrame):
     def set_generating(self, generating: bool):
         self._generating = generating
         self._text.setReadOnly(generating)
-        self._send_btn.setEnabled(not generating)
+        self._send_btn.setEnabled(True)   # always enabled — stops generation when active
         self._send_btn.setText("⏹" if generating else "➤")
+        self._send_btn.setToolTip("Stop generation" if generating else "Send")
 
     def _on_voice_click(self, checked: bool):
         self._recording = checked

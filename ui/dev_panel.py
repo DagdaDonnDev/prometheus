@@ -113,10 +113,18 @@ class DevPanel(QWidget):
         self.setMinimumSize(700, 500)
         self._setup_ui()
 
-        # Auto-refresh every 2 seconds
+        # Auto-refresh every 2 seconds — only when visible
         self._timer = QTimer()
         self._timer.timeout.connect(self._refresh)
         self._timer.start(2000)
+
+    def showEvent(self, event):
+        self._timer.start(2000)
+        super().showEvent(event)
+
+    def hideEvent(self, event):
+        self._timer.stop()
+        super().hideEvent(event)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)

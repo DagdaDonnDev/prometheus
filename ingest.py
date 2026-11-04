@@ -7,6 +7,7 @@ Usage:
     python ingest.py                    # ingest all sources
     python ingest.py --source army      # ingest specific source
     python ingest.py --rebuild          # clear and rebuild
+    python ingest.py --stats            # show knowledge base statistics
 """
 
 import os
@@ -15,13 +16,23 @@ import json
 import argparse
 import hashlib
 from pathlib import Path
-from typing import List, Dict, Optional, Generator
+from typing import List, Dict, Optional, Generator, Tuple
 
 
 KNOWLEDGE_PATH = Path("knowledge_base")
 PROCESSED_PATH = Path("memory/processed_sources.json")
 CHUNK_SIZE = 400        # words per chunk
 CHUNK_OVERLAP = 50      # word overlap between chunks
+
+# Domains where page images are extracted alongside text
+IMAGE_ELIGIBLE_DOMAINS = {
+    "plants_temperate", "plants_tropical", "plants_desert", "plants_arctic",
+    "medical", "emergency_medicine", "where_no_doctor", "where_no_dentist",
+    "blacksmithing", "electronics", "build", "navigation",
+}
+
+# Target image dimensions for extracted pages (width in px, maintain aspect)
+IMAGE_PAGE_WIDTH = 800
 
 
 class TextExtractor:
@@ -40,6 +51,69 @@ class TextExtractor:
             return self._extract_json(file_path)
         else:
             return None
+
+    def extract_pdf_with_pages(self, path: Path) -> List[Tuple[int, str]]:
+        """
+        Extract text per page from a PDF.
+        Returns list of (page_num, text) tuples.
+        Page numbers are 1-indexed.
+        """
+        try:
+            import fitz
+            doc = fitz.open(str(path))
+            pages = []
+            for i, page in enumerate(doc):
+                text = page.get_text()
+                if text.strip():
+                    pages.append((i + 1, text))
+            doc.close()
+            return pages
+        except ImportError:
+            # Fall back to extracting full text as single page
+            text = self._extract_pdf(path)
+            return [(1, text)] if text else []
+        except Exception as e:
+            print(f"  Error extracting PDF {path.name}: {e}")
+            return []
+
+    def extract_page_images(
+        self, path: Path, image_dir: Path, source: str
+    ) -> Dict[int, Path]:
+        """
+        Extract each PDF page as a JPEG image.
+        Only called for image-eligible domains.
+        Returns dict of {page_num: image_path}.
+        Skips pages that already have an image file.
+        """
+        page_images: Dict[int, Path] = {}
+
+        try:
+            import fitz
+            image_dir.mkdir(parents=True, exist_ok=True)
+            doc = fitz.open(str(path))
+
+            for i, page in enumerate(doc):
+                page_num = i + 1
+                img_path = image_dir / f"{source}_p{page_num:03d}.jpg"
+                page_images[page_num] = img_path
+
+                if img_path.exists():
+                    continue  # Already extracted — skip
+
+                # Render at target width
+                zoom = IMAGE_PAGE_WIDTH / page.rect.width
+                mat = fitz.Matrix(zoom, zoom)
+                pix = page.get_pixmap(matrix=mat)
+                pix.save(str(img_path))
+
+            doc.close()
+
+        except ImportError:
+            pass  # PyMuPDF not installed — no images
+        except Exception as e:
+            print(f"  Image extraction failed for {path.name}: {e}")
+
+        return page_images
 
     def _extract_text(self, path: Path) -> str:
         try:
@@ -68,7 +142,6 @@ class TextExtractor:
             from bs4 import BeautifulSoup
             html = path.read_text(encoding="utf-8", errors="replace")
             soup = BeautifulSoup(html, "lxml")
-            # Remove scripts and styles
             for tag in soup(["script", "style", "nav", "footer", "header"]):
                 tag.decompose()
             return soup.get_text(separator="\n", strip=True)
@@ -100,9 +173,12 @@ class Chunker:
         self.chunk_size = chunk_size
         self.overlap = overlap
 
-    def chunk(self, text: str, source: str, domain: str) -> List[Dict]:
-        """Split text into chunks with metadata."""
-        # Clean text
+    def chunk(self, text: str, source: str, domain: str,
+              page_num: int = 0) -> List[Dict]:
+        """
+        Split text into chunks with metadata.
+        page_num: if non-zero, stored in each chunk for image lookup.
+        """
         text = self._clean(text)
         words = text.split()
 
@@ -119,28 +195,46 @@ class Chunker:
                 continue
 
             content = " ".join(chunk_words)
-            chunk_id = f"{domain}_{source}_{chunk_idx}"
+            chunk_id = (
+                f"{domain}_{source}_p{page_num}_{chunk_idx}"
+                if page_num else
+                f"{domain}_{source}_{chunk_idx}"
+            )
 
-            chunks.append({
+            chunk = {
                 "id": chunk_id,
                 "content": content,
                 "source": source,
                 "domain": domain,
                 "word_count": len(chunk_words),
-                "chunk_index": chunk_idx
-            })
+                "chunk_index": chunk_idx,
+            }
+            if page_num:
+                chunk["page_num"] = page_num
+
+            chunks.append(chunk)
             chunk_idx += 1
 
         return chunks
 
+    def chunk_pages(
+        self, pages: List[Tuple[int, str]], source: str, domain: str
+    ) -> List[Dict]:
+        """
+        Chunk a list of (page_num, text) tuples.
+        Each chunk retains the page number it came from.
+        """
+        all_chunks = []
+        for page_num, text in pages:
+            page_chunks = self.chunk(text, source, domain, page_num=page_num)
+            all_chunks.extend(page_chunks)
+        return all_chunks
+
     def _clean(self, text: str) -> str:
         """Clean text for chunking."""
         import re
-        # Normalize whitespace
         text = re.sub(r'\s+', ' ', text)
-        # Remove very long runs of special characters
         text = re.sub(r'[^\w\s.,;:!?\'\"()\-/°%]+', ' ', text)
-        # Collapse spaces again
         text = re.sub(r' +', ' ', text)
         return text.strip()
 
@@ -210,60 +304,92 @@ class Ingester:
 
         total_files = 0
         total_chunks = 0
+        total_images = 0
         skipped = 0
 
-        # Walk all subdirectories
         for domain_dir in sorted(KNOWLEDGE_PATH.iterdir()):
             if not domain_dir.is_dir():
                 continue
 
             domain = domain_dir.name
 
-            # Filter if specified
             if source_filter and source_filter not in domain:
                 continue
 
             print(f"\n📁 Processing domain: {domain}")
+            image_eligible = domain in IMAGE_ELIGIBLE_DOMAINS
 
             for file_path in sorted(domain_dir.rglob("*")):
                 if not file_path.is_file():
                     continue
+                if file_path.suffix.lower() not in (
+                    ".txt", ".md", ".pdf", ".html", ".htm", ".json"
+                ):
+                    continue
 
-                # Check if already processed
                 file_hash = self._file_hash(file_path)
                 if file_hash in self.processed and not self.rebuild:
                     skipped += 1
                     continue
 
-                # Extract text
-                text = self.extractor.extract(file_path)
-                if not text or len(text.strip()) < 100:
-                    continue
-
-                # Chunk it
+                is_pdf = file_path.suffix.lower() == ".pdf"
                 source = file_path.stem.replace(" ", "_").lower()
-                chunks = self.chunker.chunk(text, source, domain)
+                chunks = []
+                img_count = 0
+
+                if is_pdf and image_eligible:
+                    # Per-page extraction: text with page numbers + images
+                    pages = self.extractor.extract_pdf_with_pages(file_path)
+                    if not pages:
+                        continue
+
+                    chunks = self.chunker.chunk_pages(pages, source, domain)
+
+                    # Extract page images (skips already-extracted)
+                    image_dir = domain_dir / "_images"
+                    page_images = self.extractor.extract_page_images(
+                        file_path, image_dir, source
+                    )
+                    img_count = len(page_images)
+                    total_images += img_count
+
+                elif is_pdf:
+                    # Non-image-eligible PDF: extract full text, no page tracking
+                    text = self.extractor.extract(file_path)
+                    if not text or len(text.strip()) < 100:
+                        continue
+                    chunks = self.chunker.chunk(text, source, domain)
+
+                else:
+                    # Text/HTML/JSON
+                    text = self.extractor.extract(file_path)
+                    if not text or len(text.strip()) < 100:
+                        continue
+                    chunks = self.chunker.chunk(text, source, domain)
 
                 if not chunks:
                     continue
 
-                # Add to batch
                 self.all_chunks.extend(chunks)
                 self.processed[file_hash] = {
                     "file": str(file_path),
                     "source": source,
                     "domain": domain,
-                    "chunks": len(chunks)
+                    "chunks": len(chunks),
+                    "images": img_count,
                 }
 
                 total_files += 1
                 total_chunks += len(chunks)
-                print(f"  ✓ {file_path.name} → {len(chunks)} chunks")
+                img_note = f" + {img_count} images" if img_count else ""
+                print(f"  ✓ {file_path.name} → {len(chunks)} chunks{img_note}")
 
         print(f"\n📊 Summary:")
         print(f"  Files processed: {total_files}")
         print(f"  Files skipped (already indexed): {skipped}")
         print(f"  New chunks: {total_chunks}")
+        if total_images:
+            print(f"  Page images extracted: {total_images}")
 
         if self.all_chunks:
             self._embed_and_store()
@@ -288,7 +414,14 @@ class Ingester:
 
             texts = [c["content"] for c in batch]
             ids = [c["id"] for c in batch]
-            metadatas = [{"source": c["source"], "domain": c["domain"]} for c in batch]
+            metadatas = [
+                {
+                    "source": c["source"],
+                    "domain": c["domain"],
+                    "page_num": c.get("page_num", 0),
+                }
+                for c in batch
+            ]
 
             # Check for duplicate IDs and make unique
             existing = set()

@@ -132,51 +132,64 @@ DOMAIN_PARTITIONS = {
 INTENT_PATTERNS = {
     Intent.EMERGENCY: [
         "help", "urgent", "dying", "emergency", "right now",
-        "can't stop", "won't stop", "not breathing", "no pulse",
-        "getting worse", "critical", "life threatening",
+        "can't stop", "cannot stop", "won't stop", "not breathing", "no pulse",
+        "getting worse", "critical", "life threatening", "unresponsive",
+        "bleeding badly", "bleeding a lot", "losing blood", "turning blue",
+        "bleeding and", "bleed and",
     ],
     Intent.PROCEDURE: [
         "how do i", "how to", "steps to", "step by step",
         "instructions for", "process for", "what do i do",
         "how should i", "can you show", "walk me through",
+        "how can i", "what is the procedure", "how do you",
     ],
     Intent.IDENTIFY: [
         "what is this", "is this safe", "can i eat", "is it poisonous",
         "what plant", "what animal", "identify", "recognise", "looks like",
-        "what kind of",
+        "what kind of", "safe to eat", "edible", "is this plant", "what mushroom",
+        "toxic", "is it dangerous",
     ],
     Intent.DIAGNOSE: [
         "symptoms", "what's wrong", "why is", "cause of",
         "getting sick", "feeling", "pain in", "signs of",
-        "what could", "could it be",
+        "what could", "could it be", "sick", "fever", "ill",
+        "hurting", "aching", "infection", "disease", "condition",
+        "is it serious", "what does it mean", "they seem",
     ],
     Intent.LOCATE: [
         "where can i find", "where to find", "how to find",
-        "source of", "get", "obtain", "look for",
+        "source of", "obtain", "look for", "where is",
+        "where do i get", "find some", "locate",
     ],
     Intent.EXPLAIN: [
         "why does", "how does", "what is", "explain", "tell me about",
-        "describe", "what causes", "understand",
+        "describe", "what causes", "understand", "what does",
     ],
     Intent.DISCUSS: [
         "what do you think", "thoughts on", "talk about",
         "discuss", "opinion", "feel about", "believe",
-        "philosophy", "meaning", "purpose",
+        "philosophy", "meaning", "purpose", "stoicism", "stoic",
+        "frankl", "marcus aurelius", "epictetus", "seneca",
+        "what does it mean to", "is there meaning", "makes sense",
     ],
     Intent.REFLECT: [
-        "i feel", "i'm scared", "i'm worried", "struggling",
-        "can't cope", "overwhelmed", "alone", "lonely",
-        "missing", "grief", "lost someone",
+        "i feel", "i'm scared", "i'm worried", "im scared", "im worried",
+        "struggling", "can't cope", "cannot cope", "overwhelmed",
+        "alone", "lonely", "missing", "grief", "lost someone",
+        "afraid", "hopeless", "pointless", "worthless",
+        "don't know if", "not sure i", "hard to keep going",
+        "i am scared", "feeling lost", "feeling alone",
     ],
     Intent.ASSESS: [
         "should i", "is it worth", "better to", "right choice",
         "what are my options", "assess", "evaluate",
-        "situation is", "what do you recommend",
+        "situation is", "what do you recommend", "which is better",
+        "what would you do",
     ],
     Intent.PLAN: [
-        "what next", "next steps", "plan", "priority",
-        "what should i do", "where do i start", "order of",
-        "sequence", "roadmap",
+        "what next", "next steps", "priority",
+        "where do i start", "order of",
+        "sequence", "roadmap", "what should i focus",
     ],
 }
 
@@ -208,7 +221,7 @@ class IntentRouter:
     """
 
     def route(self, query: str, tab_id: str) -> RoutingPlan:
-        intent = self._classify(query)
+        intent = self._classify(query, tab_id)
         partition = DOMAIN_PARTITIONS.get(tab_id, DOMAIN_PARTITIONS["prometheus"])
 
         # Emergency always gets more results and strict domains
@@ -228,11 +241,6 @@ class IntentRouter:
 
         # Discussion/reflection intents — companion tab gets all domains
         if intent in DISCUSSION_INTENTS and tab_id == "prometheus":
-            all_domains = (
-                partition["tier1"] +
-                partition["tier2"] +
-                partition["tier3"]
-            )
             return RoutingPlan(
                 intent          = intent,
                 tab_id          = tab_id,
@@ -262,7 +270,7 @@ class IntentRouter:
             n_tier3         = 0 if is_strict else 1,
         )
 
-    def _classify(self, query: str) -> Intent:
+    def _classify(self, query: str, tab_id: str = "") -> Intent:
         """Score query against intent patterns, return best match."""
         q = query.lower()
         scores = {intent: 0 for intent in Intent}
@@ -272,13 +280,29 @@ class IntentRouter:
                 if pattern in q:
                     scores[intent] += 1
 
-        # Emergency overrides everything
+        # Emergency overrides everything — even a single match
         if scores[Intent.EMERGENCY] > 0:
             return Intent.EMERGENCY
 
-        # Reflection overrides discussion
+        # In medical tab: DIAGNOSE overrides REFLECT when both present
+        if tab_id == "medical" and scores[Intent.DIAGNOSE] > 0:
+            return Intent.DIAGNOSE
+
+        # Reflection overrides discuss and explain when present
         if scores[Intent.REFLECT] > 0:
             return Intent.REFLECT
+
+        # Diagnose overrides explain when present — medical context
+        if scores[Intent.DIAGNOSE] > 0 and scores[Intent.DIAGNOSE] >= scores[Intent.EXPLAIN]:
+            return Intent.DIAGNOSE
+
+        # Identify overrides plan/explain when present
+        if scores[Intent.IDENTIFY] > 0 and scores[Intent.IDENTIFY] >= scores[Intent.PLAN]:
+            return Intent.IDENTIFY
+
+        # Discuss overrides explain for philosophical queries
+        if scores[Intent.DISCUSS] > 0 and scores[Intent.DISCUSS] >= scores[Intent.EXPLAIN]:
+            return Intent.DISCUSS
 
         best = max(scores, key=scores.get)
         if scores[best] == 0:

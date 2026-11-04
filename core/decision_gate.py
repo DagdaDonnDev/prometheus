@@ -41,6 +41,11 @@ HIGH_RISK_DOMAINS = {
         "stroke", "heart", "cardiac", "cpr", "resuscitation", "tourniquet",
         "suture", "stitch", "amputation", "crush", "spinal", "head injury",
         "concussion", "dose", "dosage", "medicine", "drug", "antibiotic",
+        "symptoms", "sick", "illness", "injured", "injury", "injur",
+        "treat", "treatment", "diagnose", "diagnosis", "pain", "hurt",
+        # Food safety — misidentification is life threatening
+        "can i eat", "safe to eat", "edible", "mushroom", "berry", "berries",
+        "plant safe", "poisonous", "toxic plant", "is it safe",
     ],
     "chemical": [
         "acid", "caustic", "lye", "bleach", "ammonia", "chlorine", "cyanide",
@@ -59,6 +64,7 @@ HIGH_RISK_DOMAINS = {
     "emergency": [
         "dying", "not breathing", "no pulse", "unconscious", "right now",
         "emergency", "critical", "life threatening", "can't stop bleeding",
+        "bleeding badly", "bleeding a lot", "bleeding and", "i'm bleeding",
         "won't stop", "getting worse fast", "turning blue", "unresponsive",
     ],
 }
@@ -66,7 +72,8 @@ HIGH_RISK_DOMAINS = {
 AMBIGUITY_MARKERS = [
     "maybe", "might", "think", "not sure", "possibly", "could be",
     "looks like", "seems", "appears", "kind of", "sort of",
-    "i don't know", "unsure", "unclear", "not certain",
+    "i don't know", "unsure", "unclear", "not certain", "maybe",
+    "possibly", "perhaps",
 ]
 
 
@@ -126,7 +133,7 @@ class DecisionGate:
 
         # Choose mode
         mode = self._mode(band, is_emergency, is_high_risk, has_ambiguity,
-                          context_complete, sources_conflict)
+                          context_complete, sources_conflict, tab_id)
 
         # Clarifying questions if needed
         clarifications = (
@@ -158,9 +165,9 @@ class DecisionGate:
     def _band(self, score, sources, conflict, complete) -> str:
         if conflict or not complete:
             return "low" if score >= 70 else "very_low"
-        if score >= 88 and sources >= 2:
+        if score >= 80 and sources >= 2:
             return "high"
-        if score >= 70 and sources >= 1:
+        if score >= 65 and sources >= 1:
             return "medium"
         if score >= 50:
             return "low"
@@ -169,19 +176,42 @@ class DecisionGate:
     # ── Mode selection ─────────────────────────────────────────────────────
 
     def _mode(self, band, is_emergency, is_high_risk, has_ambiguity,
-              context_complete, sources_conflict) -> ResponseMode:
+              context_complete, sources_conflict, tab_id="") -> ResponseMode:
 
         if is_emergency:
             return ResponseMode.EMERGENCY
 
-        if band == "very_low" or (sources_conflict and is_high_risk):
-            return ResponseMode.SAFE_MODE
+        # Companion tab — always DIRECT unless emergency
+        if tab_id == "prometheus":
+            return ResponseMode.DIRECT
 
-        if is_high_risk and has_ambiguity and band in ("low", "very_low"):
+        # Conflicting sources: CAUTIOUS (show both options) not SAFE_MODE
+        if sources_conflict and is_high_risk:
+            return ResponseMode.CAUTIOUS
+
+        # High-risk + ambiguous query: CLARIFY before anything else
+        if is_high_risk and has_ambiguity:
             return ResponseMode.CLARIFY
 
-        if is_high_risk and band == "low":
+        # No sources at all in a high-risk domain = safe mode
+        if not context_complete and is_high_risk:
             return ResponseMode.SAFE_MODE
+
+        # Very low confidence: safe_mode if no context, clarify if high-risk with context
+        if band == "very_low":
+            if not is_high_risk and not context_complete:
+                return ResponseMode.SAFE_MODE
+            if context_complete and is_high_risk:
+                return ResponseMode.CLARIFY
+            return ResponseMode.SAFE_MODE
+
+        # High-risk domains: stay CAUTIOUS even at high band (life safety)
+        # Exception: procedure intent with good sources can be direct —
+        # but since _mode doesn't receive intent, we rely on band for this
+        if is_high_risk:
+            if band == "low":
+                return ResponseMode.SAFE_MODE
+            return ResponseMode.CAUTIOUS  # medium or high: still cautious for safety
 
         if band == "medium":
             return ResponseMode.CAUTIOUS
@@ -272,109 +302,68 @@ class DecisionGate:
                assumptions, risk_domains, sources_conflict):
 
         parts = []
-        template = ""
 
         if mode == ResponseMode.EMERGENCY:
             parts.append(
                 "EMERGENCY MODE.\n"
-                "Life-threatening situation. Response rules:\n"
-                "- First instruction must be doable in under 5 seconds.\n"
-                "- Maximum 4 steps. Short sentences only. No preamble.\n"
-                "- One escalation condition at the end.\n"
-                "- Do not hedge or qualify the first action."
-            )
-            template = (
-                "STEP 1 — Do this now: [single immediate action]\n"
-                "STEP 2 — [next]\n"
-                "STEP 3 — [next]\n"
-                "MONITOR — [what to watch]\n"
-                "ESCALATE if — [single condition]"
+                "Lead with the single most critical action — doable in seconds.\n"
+                "Continue in priority order. Short sentences. No preamble.\n"
+                "A 2-step answer is better than a padded 4-step one.\n"
+                "End with the one condition that changes everything.\n"
+                "Vary the phrasing naturally — clarity matters more than format."
             )
 
         elif mode == ResponseMode.SAFE_MODE:
             parts.append(
-                "SAFE MODE.\n"
-                "Confidence or context is insufficient for full guidance.\n"
-                "- Conservative, stabilising instructions only.\n"
-                "- No guessing or extrapolation.\n"
-                "- State explicitly what you are uncertain about.\n"
-                "- Tell the user what information would allow a better answer.\n"
-                "- Do not provide step-by-step procedures for high-risk actions "
-                "without clearer context."
-            )
-            template = (
-                "What I can tell you safely: [conservative action]\n"
-                "What I am uncertain about: [honest statement]\n"
-                "What would help me give better guidance: [specific information needed]"
+                "SAFE MODE — not enough information for full guidance.\n"
+                "Say what you can safely say, then be honest about what you cannot.\n"
+                "Tell the person what you need to know to help them properly.\n"
+                "Keep it natural — don't follow a script, just be genuinely careful."
             )
 
         elif mode == ResponseMode.CLARIFY:
             parts.append(
-                "CLARIFICATION REQUIRED before proceeding.\n"
-                "- Ask clarifying questions before giving any instructions.\n"
-                "- Maximum 3 questions.\n"
-                "- Brief acknowledgement first, then ask.\n"
-                "- Do not provide the answer yet.\n"
-                "- Do not assume unstated details."
-            )
-            template = (
-                "Brief acknowledgement of the situation.\n"
-                "Before I can give you the right answer, I need to know:\n"
-                "1. [question]\n"
-                "2. [question if needed]\n"
-                "3. [question if needed]"
+                "CLARIFICATION NEEDED before answering.\n"
+                "Acknowledge briefly, then ask what you need.\n"
+                "2-3 questions only — the ones that will actually change your answer.\n"
+                "Don't give the answer yet."
             )
 
         elif mode == ResponseMode.CAUTIOUS:
             parts.append(
-                "CAUTIOUS MODE.\n"
-                "- Answer with clear steps.\n"
-                "- Flag any steps where confidence is lower.\n"
-                "- Include one verification step where appropriate.\n"
-                "- Do not omit information but be honest about uncertainty.\n"
-                "- Never present uncertain information as definitive."
-            )
-            template = (
-                "Clear answer with steps.\n"
-                "Note uncertainty where it exists.\n"
-                "Include what to check or verify."
+                "Answer clearly but flag uncertainty honestly.\n"
+                "Match length and format to the question — "
+                "a simple question needs a direct answer with a caveat, "
+                "not a five-step procedure with warnings at every stage.\n"
+                "If something needs verifying, say so once and move on."
             )
 
         elif mode == ResponseMode.DIRECT:
             parts.append(
-                "High confidence. Give a direct, clear answer.\n"
-                "No unnecessary hedging. Be concise and actionable."
+                "Answer directly. Match the length to what's actually needed.\n"
+                "Steps where they help, prose where it reads better. No padding."
             )
-            template = "Direct answer with steps if applicable."
 
-        # Worst-case assumptions — state them before instructions
+        # Worst-case assumptions — natural language, not a header
         if worst_case and assumptions:
             assumption_lines = "\n".join(f"- {a}" for a in assumptions)
             parts.append(
-                f"WORST-CASE ASSUMPTIONS APPLIED:\n{assumption_lines}\n"
-                "State these assumptions at the start of your response "
-                "before giving any instructions."
+                f"State these assumptions briefly before answering:\n{assumption_lines}"
             )
 
-        # High risk gate
+        # High risk — intent not script
         if is_high_risk and mode not in (ResponseMode.EMERGENCY, ResponseMode.SAFE_MODE):
             domains = ", ".join(risk_domains)
             parts.append(
-                f"HIGH-RISK DOMAIN(S): {domains}.\n"
-                "If any critical detail is missing or ambiguous, "
-                "state your assumption explicitly before proceeding. "
-                "Never proceed silently on an ambiguous high-risk instruction."
+                f"High-risk area ({domains}): if anything critical is unclear, "
+                "say what you're assuming. Don't guess silently."
             )
 
         # Source conflict
         if sources_conflict:
             parts.append(
-                "SOURCE CONFLICT: available sources do not fully agree.\n"
-                "Present the most conservative option.\n"
-                "Note the disagreement briefly without overwhelming the user."
+                "Sources disagree here. Give the safer option. "
+                "Note the disagreement in one sentence."
             )
 
-        if template:
-            parts.append(f"RESPONSE FORMAT TO FOLLOW:\n{template}")
-
-        return "\n\n".join(parts), template
+        return "\n\n".join(parts), ""

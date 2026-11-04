@@ -8,6 +8,24 @@ import json
 from typing import Generator, List, Dict, Optional, Callable
 
 
+# Temperature by intent — deterministic for safety-critical,
+# warmer for conversation and reflection
+INTENT_TEMPERATURE = {
+    "emergency":  0.15,   # As deterministic as possible — follow the source
+    "procedure":  0.25,   # Consistent steps
+    "diagnose":   0.30,   # Some flexibility but grounded
+    "identify":   0.25,   # Consistent identification
+    "locate":     0.40,
+    "explain":    0.55,
+    "assess":     0.55,
+    "plan":       0.60,
+    "discuss":    0.80,   # Conversational, varied
+    "reflect":    0.85,   # Warm, personal, never robotic
+}
+
+DEFAULT_TEMPERATURE = 0.65
+
+
 class LLMEngine:
     def __init__(self, config):
         self.config = config
@@ -41,13 +59,17 @@ class LLMEngine:
         on_done: Callable[[str], None],
         on_error: Callable[[str], None],
         tab_id: str = "",
+        intent: str = "",
     ):
         """
         Stream tokens from the model.
         Uses companion_model for the prometheus tab,
         fast_model for everything else.
+        Temperature varies by intent — lower for safety-critical,
+        higher for conversation and reflection.
         """
         model = self.config.model_for_tab(tab_id) if tab_id else self.config.llm_model
+        temperature = INTENT_TEMPERATURE.get(intent, DEFAULT_TEMPERATURE)
 
         try:
             payload = {
@@ -58,8 +80,9 @@ class LLMEngine:
                 "stream": True,
                 "options": {
                     "num_predict": self.config.max_tokens,
-                    "temperature": 0.7,
-                    "top_p": 0.9,
+                    "temperature": temperature,
+                    "top_p":       0.9,
+                    "repeat_penalty": 1.1,  # Reduce repetitive phrasing
                 }
             }
 
@@ -105,6 +128,7 @@ class LLMEngine:
         Generate a summary of conversation history.
         Used for rolling context management.
         Blocking call (not streamed).
+        Low temperature — factual compression, not creative.
         """
         try:
             payload = {
@@ -122,7 +146,8 @@ class LLMEngine:
                 "stream": False,
                 "options": {
                     "num_predict": 200,
-                    "temperature": 0.3
+                    "temperature": 0.2,   # Very low — factual summary
+                    "repeat_penalty": 1.1,
                 }
             }
 
@@ -149,34 +174,41 @@ class LLMEngine:
         decision_addendum: str = "",
         llm_bounds: str = "",
     ) -> str:
-        """Build the full system prompt with all governance layers."""
+        """
+        Build the full system prompt with all governance layers.
 
+        Order matters for 3B models — most important context goes last,
+        closest to where the model actually generates from.
+        """
         parts = [tab_system]
 
-        if user_context and user_context != "No user context yet.":
-            parts.append(f"\n\nCurrent user situation:\n{user_context}")
-
-        if knowledge_context:
-            parts.append(
-                f"\n\nRetrieved knowledge (use this as your primary source):\n"
-                f"{knowledge_context}"
-            )
-
-        if confidence_note:
-            parts.append(f"\n\nSource guidance:\n{confidence_note}")
-
-        if decision_addendum:
-            parts.append(f"\n\nRESPONSE GOVERNANCE:\n{decision_addendum}")
-
+        # Behavioural constraints next — anchors everything that follows
         if llm_bounds:
             parts.append(f"\n\nBEHAVIOURAL CONSTRAINTS:\n{llm_bounds}")
 
+        # Retrieved knowledge — the primary content to work from
+        if knowledge_context:
+            parts.append(
+                f"\n\nRetrieved knowledge — use as primary source:\n"
+                f"{knowledge_context}"
+            )
+
+        # Source confidence guidance
+        if confidence_note:
+            parts.append(f"\n\nSource guidance:\n{confidence_note}")
+
+        # User situation — injected close to generation point
+        if user_context and user_context != "No user context yet.":
+            parts.append(f"\n\nUser situation:\n{user_context}")
+
+        # Response governance — last thing model reads before generating
+        if decision_addendum:
+            parts.append(f"\n\nRESPONSE GUIDANCE:\n{decision_addendum}")
+
         if not decision_addendum and not llm_bounds:
             parts.append(
-                "\n\nBe concise. 2-3 sentences for simple questions. "
-                "Expand only when the situation genuinely requires detail. "
-                "Speak naturally and warmly. "
-                "When uncertain, say so clearly."
+                "\n\nBe concise. Match length to what's needed. "
+                "Speak naturally. When uncertain, say so."
             )
 
         return "\n".join(parts)

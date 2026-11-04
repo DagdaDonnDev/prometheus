@@ -251,6 +251,7 @@ class MainWindow(QMainWindow):
         self.input_bar = InputBar(self.stt)
         self.input_bar.message_submitted.connect(self._on_send)
         self.input_bar.voice_toggled.connect(self._on_voice_toggle)
+        self.input_bar.stop_requested.connect(self._force_stop)
         main_layout.addWidget(self.input_bar)
 
         # Status bar
@@ -334,6 +335,14 @@ class MainWindow(QMainWindow):
         settings_btn.clicked.connect(self._show_settings)
         layout.addWidget(settings_btn)
 
+        # Reset
+        reset_btn = QPushButton("↺")
+        reset_btn.setObjectName("headerBtn")
+        reset_btn.setFixedSize(30, 30)
+        reset_btn.setToolTip("Reset memory, tab, or full wipe")
+        reset_btn.clicked.connect(self._show_reset_dialog)
+        layout.addWidget(reset_btn)
+
         # Dev panel (Ctrl+D shortcut too)
         self._dev_btn = QPushButton("🔬")
         self._dev_btn.setObjectName("headerBtn")
@@ -350,6 +359,9 @@ class MainWindow(QMainWindow):
 
         dev_shortcut = QShortcut(QKeySequence("Ctrl+D"), self)
         dev_shortcut.activated.connect(self._show_dev_panel)
+
+        stop_shortcut = QShortcut(QKeySequence("Escape"), self)
+        stop_shortcut.activated.connect(self._force_stop)
 
     def _show_dev_panel(self):
         """Show observability dev panel."""
@@ -642,10 +654,21 @@ class MainWindow(QMainWindow):
 
         # ── Step 11: Stream response ───────────────────────────────────────
         messages = self.context_mgr.prepare_messages(tab)
+
+        # Recency bias — ensure the most recent exchange appears last in history
+        # (closest to the new query) so the model attends to it most strongly
+        if len(messages) >= 4:
+            # Find and move the last assistant+user pair to the end
+            # messages are already in order, so this is just confirmation
+            # that prepare_messages returns them correctly ordered
+            pass  # context_manager already returns chronological order
+
         self.chat_view.start_assistant_message()
 
         self._llm_worker = LLMWorker(
-            self.llm, messages, system_prompt, tab_id=tab.id
+            self.llm, messages, system_prompt,
+            tab_id=tab.id,
+            intent=routing_plan.intent.value,
         )
         self._llm_worker.token_received.connect(self._on_token)
         self._llm_worker.response_done.connect(
@@ -683,7 +706,8 @@ class MainWindow(QMainWindow):
 
     def _on_response_done(self, tab: Tab, full_response: str):
         self.tts.flush()
-        self.chat_view.finish_assistant_message()
+        images = self.knowledge.get_last_images()
+        self.chat_view.finish_assistant_message(image_paths=images if images else None)
         tab.add_message("assistant", full_response)
         tracer.finish(full_response, self.config.model_for_tab(tab.id))
         if self.context_mgr.should_summarize(tab):
@@ -736,7 +760,165 @@ class MainWindow(QMainWindow):
         layout.addWidget(quick)
         dialog.exec()
 
-    def _toggle_sidebar(self):
+    def _force_stop(self):
+        """
+        Force-stop any current generation immediately.
+        Resets all state. Used when model is stuck or
+        user wants to abort a response in progress.
+        """
+        # Kill the LLM worker thread
+        if self._llm_worker and self._llm_worker.isRunning():
+            self._llm_worker.terminate()
+            self._llm_worker.wait(500)
+
+        # Clear TTS queue and stop speech
+        self.tts.stop()
+
+        # Finish any open bubble cleanly
+        self.chat_view.finish_assistant_message()
+
+        # Reset generation state
+        self._generating = False
+        self.input_bar.set_generating(False)
+
+        self.status_bar.showMessage("⏹ Stopped", 3000)
+
+    def _show_reset_dialog(self):
+        """Show reset options dialog."""
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Reset")
+        dialog.setFixedSize(380, 280)
+
+        layout = QVBoxLayout(dialog)
+        layout.setSpacing(10)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        title = QLabel("What would you like to reset?")
+        font = title.font()
+        font.setBold(True)
+        font.setPointSize(13)
+        title.setFont(font)
+        layout.addWidget(title)
+
+        note = QLabel(
+            "These actions cannot be undone.\n"
+            "A backup is saved automatically before clearing."
+        )
+        note.setObjectName("noteLabel")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+
+        # Reset current tab conversation
+        tab = self.tab_manager.get_active_tab()
+        tab_name = tab.name if tab else "Tab"
+
+        clear_tab_btn = QPushButton(f"🗑  Clear {tab_name} conversation history")
+        clear_tab_btn.setObjectName("navBtn")
+        clear_tab_btn.clicked.connect(lambda: self._reset_tab(dialog))
+        layout.addWidget(clear_tab_btn)
+
+        # Reset all tab conversations
+        clear_all_tabs_btn = QPushButton("🗑  Clear all conversation history")
+        clear_all_tabs_btn.setObjectName("navBtn")
+        clear_all_tabs_btn.clicked.connect(lambda: self._reset_all_tabs(dialog))
+        layout.addWidget(clear_all_tabs_btn)
+
+        # Reset user memory (name, day, inventory, situation)
+        clear_memory_btn = QPushButton("🧠  Reset user memory")
+        clear_memory_btn.setObjectName("navBtn")
+        clear_memory_btn.clicked.connect(lambda: self._reset_memory(dialog))
+        layout.addWidget(clear_memory_btn)
+
+        # Nuclear — everything
+        reset_all_btn = QPushButton("☢  Full reset — wipe everything")
+        reset_all_btn.setObjectName("navBtn")
+        reset_all_btn.setStyleSheet("color: #ff4444; border-color: #ff4444;")
+        reset_all_btn.clicked.connect(lambda: self._reset_everything(dialog))
+        layout.addWidget(reset_all_btn)
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(dialog.reject)
+        layout.addWidget(cancel_btn)
+
+        dialog.exec()
+
+    def _reset_tab(self, parent_dialog=None):
+        """Clear current tab's conversation history."""
+        tab = self.tab_manager.get_active_tab()
+        if not tab:
+            return
+        self.backup.backup(label="pre_tab_reset")
+        self.tab_manager.clear_tab(tab.id)
+        self.chat_view.load_tab(tab)
+        if parent_dialog:
+            parent_dialog.accept()
+        self.status_bar.showMessage(
+            f"✓ {tab.name} conversation cleared", 3000
+        )
+
+    def _reset_all_tabs(self, parent_dialog=None):
+        """Clear all tab conversation histories."""
+        reply = QMessageBox.question(
+            self, "Clear all conversations",
+            "Clear history from all tabs?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+        self.backup.backup(label="pre_all_tabs_reset")
+        for tab in self.tab_manager.tabs:
+            self.tab_manager.clear_tab(tab.id)
+        tab = self.tab_manager.get_active_tab()
+        if tab:
+            self.chat_view.load_tab(tab)
+        if parent_dialog:
+            parent_dialog.accept()
+        self.status_bar.showMessage("✓ All conversations cleared", 3000)
+
+    def _reset_memory(self, parent_dialog=None):
+        """Reset user memory back to defaults."""
+        reply = QMessageBox.question(
+            self, "Reset memory",
+            "This will clear your name, day count, location, inventory and "
+            "situation notes.\n\nConversation history is kept.\n\nContinue?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+        self.backup.backup(label="pre_memory_reset")
+        self.memory.reset()
+        self.sidebar.refresh()
+        self._day_label.setText(self._get_day_string())
+        if parent_dialog:
+            parent_dialog.accept()
+        self.status_bar.showMessage("✓ Memory reset — fresh start", 3000)
+
+    def _reset_everything(self, parent_dialog=None):
+        """Full reset — memory, all conversations, situation."""
+        reply = QMessageBox.question(
+            self, "Full reset",
+            "⚠ This wipes all memory, all conversations, and all situation data.\n\n"
+            "A backup will be saved first. Continue?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+        self.backup.backup(label="pre_full_reset")
+        self.memory.reset()
+        for tab in self.tab_manager.tabs:
+            self.tab_manager.clear_tab(tab.id)
+        tab = self.tab_manager.get_active_tab()
+        if tab:
+            self.chat_view.load_tab(tab)
+        self.sidebar.refresh()
+        self._day_label.setText(self._get_day_string())
+        if parent_dialog:
+            parent_dialog.accept()
+        self.status_bar.showMessage("✓ Full reset complete", 3000)
+        # Offer assessment on full reset
+        QTimer.singleShot(800, self._show_assessment)
         visible = self.sidebar.isVisible()
         self.sidebar.setVisible(not visible)
         self._sidebar_btn.setText("▶ Info" if visible else "◀ Info")

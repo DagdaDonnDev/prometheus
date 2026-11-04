@@ -1,16 +1,119 @@
 """
 Chat view - displays conversation messages.
-Supports streaming token append.
+Supports streaming token append and image display.
 """
+
+from pathlib import Path
+from typing import List
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QScrollArea, QLabel,
-    QFrame, QHBoxLayout, QSizePolicy, QPushButton
+    QFrame, QHBoxLayout, QSizePolicy, QPushButton,
+    QDialog
 )
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFont, QTextCursor
+from PySide6.QtGui import QFont, QPixmap
 
 from core.tabs import Tab
+
+
+class ImagePanel(QFrame):
+    """
+    Collapsible panel showing page images retrieved alongside an answer.
+    Used for plant, medical, and diagram results.
+    """
+
+    def __init__(self, image_paths: List[str], parent=None):
+        super().__init__(parent)
+        self.setObjectName("imagePanel")
+        self._visible = False
+        self._image_paths = image_paths
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 4, 8, 8)
+        layout.setSpacing(6)
+
+        # Toggle button
+        self._toggle = QPushButton(f"📷 Show source illustrations ({len(image_paths)} page{'s' if len(image_paths) > 1 else ''})")
+        self._toggle.setObjectName("summaryBar")
+        self._toggle.setFixedHeight(26)
+        self._toggle.clicked.connect(self._toggle_images)
+        layout.addWidget(self._toggle)
+
+        # Image container (hidden by default)
+        self._container = QWidget()
+        self._container.hide()
+        self._container_layout = QHBoxLayout(self._container)
+        self._container_layout.setContentsMargins(0, 0, 0, 0)
+        self._container_layout.setSpacing(8)
+        self._container_layout.setAlignment(Qt.AlignLeft)
+
+        self._images_loaded = False
+        layout.addWidget(self._container)
+
+    def _toggle_images(self):
+        self._visible = not self._visible
+        if self._visible:
+            if not self._images_loaded:
+                self._load_images()
+            self._container.show()
+            self._toggle.setText(f"📷 Hide source illustrations")
+        else:
+            self._container.hide()
+            self._toggle.setText(
+                f"📷 Show source illustrations ({len(self._image_paths)} page{'s' if len(self._image_paths) > 1 else ''})"
+            )
+
+    def _load_images(self):
+        """Load and display images (deferred until first shown)."""
+        for img_path in self._image_paths[:3]:  # max 3 images
+            if not Path(img_path).exists():
+                continue
+
+            pixmap = QPixmap(img_path)
+            if pixmap.isNull():
+                continue
+
+            # Scale to fit — max 240px wide in panel
+            pixmap = pixmap.scaledToWidth(240, Qt.SmoothTransformation)
+
+            lbl = QLabel()
+            lbl.setPixmap(pixmap)
+            lbl.setFixedSize(240, pixmap.height())
+            lbl.setCursor(Qt.PointingHandCursor)
+            lbl.setToolTip("Click to view full size")
+
+            # Click to open full size
+            path_copy = img_path
+            lbl.mousePressEvent = lambda e, p=path_copy: self._open_fullsize(p)
+
+            self._container_layout.addWidget(lbl)
+
+        self._images_loaded = True
+
+    def _open_fullsize(self, img_path: str):
+        """Open image at full resolution in a dialog."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Source illustration")
+
+        pixmap = QPixmap(img_path)
+        if pixmap.isNull():
+            return
+
+        # Scale to screen — max 900px wide
+        if pixmap.width() > 900:
+            pixmap = pixmap.scaledToWidth(900, Qt.SmoothTransformation)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        img_lbl = QLabel()
+        img_lbl.setPixmap(pixmap)
+        img_lbl.setFixedSize(pixmap.width(), pixmap.height())
+        layout.addWidget(img_lbl)
+
+        dialog.setFixedSize(pixmap.width() + 16, pixmap.height() + 16)
+        dialog.exec()
 
 
 class MessageBubble(QFrame):
@@ -37,7 +140,6 @@ class MessageBubble(QFrame):
             layout.addStretch()
             layout.addWidget(self._label)
         else:
-            # Add icon for assistant
             icon = QLabel("⚡")
             icon.setFixedWidth(24)
             icon.setAlignment(Qt.AlignTop)
@@ -67,14 +169,12 @@ class ChatView(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Tab info bar
         self._tab_info = QLabel("")
         self._tab_info.setObjectName("tabInfo")
         self._tab_info.setAlignment(Qt.AlignCenter)
         self._tab_info.setFixedHeight(30)
         layout.addWidget(self._tab_info)
 
-        # Summary bar (shown when tab has a summary)
         self._summary_bar = QPushButton("📋 View conversation summary")
         self._summary_bar.setObjectName("summaryBar")
         self._summary_bar.setFixedHeight(28)
@@ -82,7 +182,6 @@ class ChatView(QWidget):
         self._summary_bar.clicked.connect(self._show_summary)
         layout.addWidget(self._summary_bar)
 
-        # Scroll area for messages
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setObjectName("chatScroll")
@@ -103,75 +202,70 @@ class ChatView(QWidget):
     def load_tab(self, tab: Tab):
         """Load all messages from a tab."""
         self._current_tab = tab
-
-        # Update tab info bar
         self._tab_info.setText(f"{tab.icon}  {tab.name}")
 
-        # Update summary bar
         if tab.summary:
             self._summary_bar.show()
         else:
             self._summary_bar.hide()
 
-        # Clear existing messages
         self._clear_messages()
 
-        # Load history
         for msg in tab.history:
             bubble = MessageBubble(msg["role"], msg["content"])
             self._messages_layout.insertWidget(
-                self._messages_layout.count() - 1,
-                bubble
+                self._messages_layout.count() - 1, bubble
             )
 
-        # Scroll to bottom
         QTimer.singleShot(50, self._scroll_to_bottom)
 
     def _clear_messages(self):
-        """Remove all message bubbles."""
         layout = self._messages_layout
-        while layout.count() > 1:  # Keep the stretch
+        while layout.count() > 1:
             item = layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
 
     def add_message(self, role: str, content: str):
-        """Add a complete message."""
         bubble = MessageBubble(role, content)
         self._messages_layout.insertWidget(
-            self._messages_layout.count() - 1,
-            bubble
+            self._messages_layout.count() - 1, bubble
         )
         QTimer.singleShot(50, self._scroll_to_bottom)
 
     def start_assistant_message(self):
-        """Begin streaming assistant response."""
         self._current_bubble = MessageBubble("assistant", "")
         self._messages_layout.insertWidget(
-            self._messages_layout.count() - 1,
-            self._current_bubble
+            self._messages_layout.count() - 1, self._current_bubble
         )
         QTimer.singleShot(50, self._scroll_to_bottom)
 
     def append_token(self, token: str):
-        """Append a streaming token to current assistant message."""
         if self._current_bubble:
             self._current_bubble.append_text(token)
-            # Auto-scroll while streaming
             self._scroll_to_bottom()
 
-    def finish_assistant_message(self):
-        """Mark current streaming message as complete."""
+    def finish_assistant_message(self, image_paths: List[str] = None):
+        """
+        Mark current streaming message as complete.
+        If image_paths provided, attach an image panel below the bubble.
+        """
         self._current_bubble = None
         if self._current_tab and self._current_tab.summary:
             self._summary_bar.show()
 
+        # Add image panel if we have images
+        if image_paths:
+            panel = ImagePanel(image_paths)
+            self._messages_layout.insertWidget(
+                self._messages_layout.count() - 1, panel
+            )
+            QTimer.singleShot(50, self._scroll_to_bottom)
+
     def add_error(self, error: str):
-        """Display an error message."""
         bubble = MessageBubble("assistant", f"⚠ {error}")
         self._messages_layout.insertWidget(
-            self._messages_layout.count() - 1,
-            bubble
+            self._messages_layout.count() - 1, bubble
         )
         self._scroll_to_bottom()
 

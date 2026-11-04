@@ -124,28 +124,38 @@ class ContradictionDetector:
     ) -> Optional[str]:
         """
         Detect conflicting numeric values.
-        Only flags when there are numbers in both but none in common.
+        Only flags when values differ by more than 2x with no overlap.
+        Uses rounded comparison to avoid float equality issues.
         """
         if not nums_a or not nums_b:
             return None
 
-        set_a = set(nums_a)
-        set_b = set(nums_b)
+        # Round to 2dp to avoid float equality fragility
+        set_a = {round(n, 2) for n in nums_a}
+        set_b = {round(n, 2) for n in nums_b}
 
-        # If no overlap and both have numbers — potential conflict
-        if not (set_a & set_b) and len(set_a) > 0 and len(set_b) > 0:
-            # Only flag if values differ significantly (not just different measurements)
-            a_max = max(set_a)
-            b_max = max(set_b)
-            if a_max > 0 and b_max > 0:
-                ratio = max(a_max, b_max) / min(a_max, b_max)
-                if ratio > 2.0:  # values differ by more than 2x
-                    return (
-                        f"Sources give different numeric values "
-                        f"({', '.join(str(n) for n in sorted(set_a)[:3])} vs "
-                        f"{', '.join(str(n) for n in sorted(set_b)[:3])}). "
-                        f"Use the more conservative value."
-                    )
+        # Check for overlap within 10% tolerance
+        def near_match(a, b):
+            return abs(a - b) / max(abs(a), abs(b), 1) < 0.10
+
+        has_overlap = any(
+            near_match(a, b) for a in set_a for b in set_b
+        )
+
+        if has_overlap:
+            return None
+
+        a_max = max(set_a)
+        b_max = max(set_b)
+        if a_max > 0 and b_max > 0:
+            ratio = max(a_max, b_max) / min(a_max, b_max)
+            if ratio > 2.0:
+                return (
+                    f"Sources give different numeric values "
+                    f"({', '.join(str(n) for n in sorted(set_a)[:3])} vs "
+                    f"{', '.join(str(n) for n in sorted(set_b)[:3])}). "
+                    f"Use the more conservative value."
+                )
 
         return None
 

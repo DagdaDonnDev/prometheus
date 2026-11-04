@@ -164,29 +164,79 @@ class ConfidenceScorer:
 
     def format_for_prompt(self, results: List[Dict]) -> str:
         """
-        Format search results with confidence indicators for injection into prompt.
+        Format retrieved chunks for injection into the system prompt.
+
+        Structured so the model clearly understands:
+        - Which source is most authoritative
+        - What to trust vs treat with caution
+        - How to handle disagreement
+
+        No raw scores — the model doesn't need numbers, it needs guidance.
         """
         if not results:
             return ""
 
         output = []
-        for r in results:
-            conf = r.get("confidence", {})
-            level = conf.get("level", "UNKNOWN")
-            source = conf.get("source", "unknown")
-            score = conf.get("score", 0)
+        for i, r in enumerate(results):
+            conf   = r.get("confidence", {})
+            level  = conf.get("level", "UNKNOWN")
+            source = r.get("source", conf.get("source", "unknown"))
+            domain = r.get("domain", "")
+            tier   = r.get("_tier", "")
 
-            indicator = {
-                "HIGH":      "✓",
-                "MEDIUM":    "~",
-                "LOW":       "?",
-                "UNCERTAIN": "⚠",
-            }.get(level, "?")
+            # Source label — human readable, not numeric
+            source_label = self._source_label(source, domain)
 
-            header = f"[{indicator} {level} confidence ({score}%) | Source: {source}]"
+            # Trust instruction — what the model should do with this source
+            trust = {
+                "HIGH":      "Use this directly.",
+                "MEDIUM":    "Use this — note if anything seems uncertain.",
+                "LOW":       "Use with caution — flag uncertainty to the user.",
+                "UNCERTAIN": "Treat carefully — mention uncertainty explicitly.",
+            }.get(level, "Use carefully.")
+
+            # Tier label for context
+            tier_note = ""
+            if tier == "tier3":
+                tier_note = " (general reference — lower priority)"
+            elif tier == "personal":
+                tier_note = " (from your personal documents — unverified)"
+
+            header = f"[Source {i+1}: {source_label}{tier_note} — {trust}]"
             output.append(f"{header}\n{r['content']}")
 
         return "\n\n---\n\n".join(output)
+
+    def _source_label(self, source: str, domain: str) -> str:
+        """Human-readable source label for the model."""
+        labels = {
+            "army_fm_3_05_70":    "US Army Survival Manual FM 3-05.70",
+            "army_tm_31_210":     "US Army Field Manual TM 31-210",
+            "where_no_doctor":    "Where There Is No Doctor (Hesperian)",
+            "where_no_dentist":   "Where There Is No Dentist (Hesperian)",
+            "nuclear_survival":   "Nuclear War Survival Skills (Kearny)",
+            "foxfire":            "Foxfire Book Series",
+            "survivor_library":   "Survivor Library",
+            "the_knowledge":      "The Knowledge (Dartnell)",
+            "wikipedia":          "Wikipedia",
+            "emergency_medicine": "Emergency Medicine Reference",
+            "water_purification": "Water Purification Manual",
+            "food_preservation":  "Food Preservation Guide",
+            "blacksmithing":      "Practical Blacksmithing",
+            "soap_making":        "Soap Making Reference",
+            "plants_temperate":   "Temperate Plant Field Guide",
+            "plants_tropical":    "Tropical Plant Field Guide",
+            "plants_desert":      "Desert Plant Field Guide",
+            "plants_arctic":      "Arctic Plant Field Guide",
+            "companion":          "Psychological Support Resources",
+            "personal":           "Personal Document",
+        }
+        # Try exact match first, then domain, then clean up source string
+        label = labels.get(source) or labels.get(domain)
+        if label:
+            return label
+        # Fall back to cleaned source name
+        return source.replace("_", " ").title()
 
     def build_confidence_note(self, results: List[Dict], is_critical: bool) -> str:
         """

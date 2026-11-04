@@ -14,16 +14,17 @@ from core.config import Config
 class LLMWorker(QThread):
     """Runs LLM generation in background thread, emits tokens as they arrive."""
     token_received = Signal(str)
-    response_done = Signal(str)
+    response_done  = Signal(str)
     error_occurred = Signal(str)
 
     def __init__(self, llm: LLMEngine, messages: list,
-                 system_prompt: str, tab_id: str = ""):
+                 system_prompt: str, tab_id: str = "", intent: str = ""):
         super().__init__()
-        self.llm = llm
-        self.messages = messages
+        self.llm           = llm
+        self.messages      = messages
         self.system_prompt = system_prompt
-        self.tab_id = tab_id
+        self.tab_id        = tab_id
+        self.intent        = intent
 
     def run(self):
         self.llm.stream(
@@ -33,6 +34,7 @@ class LLMWorker(QThread):
             on_done=self.response_done.emit,
             on_error=self.error_occurred.emit,
             tab_id=self.tab_id,
+            intent=self.intent,
         )
 
 

@@ -69,6 +69,11 @@ class Memory:
         with open(MEMORY_PATH, "w") as f:
             json.dump(self.data, f, indent=2)
 
+    def reset(self):
+        """Reset memory to defaults and save."""
+        self.data = self._default()
+        self.save()
+
     def _deep_merge(self, base: dict, update: dict):
         for key, value in update.items():
             if key in base and isinstance(base[key], dict) and isinstance(value, dict):
