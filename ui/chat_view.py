@@ -15,6 +15,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QPixmap
 
 from core.tabs import Tab
+from core.platform_info import PHONE_LAYOUT
 
 
 class ImagePanel(QFrame):
@@ -140,10 +141,11 @@ class MessageBubble(QFrame):
             layout.addStretch()
             layout.addWidget(self._label)
         else:
-            icon = QLabel("⚡")
-            icon.setFixedWidth(24)
-            icon.setAlignment(Qt.AlignTop)
-            layout.addWidget(icon)
+            if not PHONE_LAYOUT:   # phone: no icon column, every pixel goes to text
+                icon = QLabel("⚡")
+                icon.setFixedWidth(24)
+                icon.setAlignment(Qt.AlignTop)
+                layout.addWidget(icon)
             layout.addWidget(self._label)
             layout.addStretch()
 
@@ -282,34 +284,48 @@ class ChatView(QWidget):
         options: {verdict_key: button label}. on_choice(verdict_key) is called
         once, then the row replaces itself with a short note.
         """
+        from PySide6.QtWidgets import QGridLayout
+
         bar = QFrame()
         bar.setObjectName("verdictBar")
-        row = QHBoxLayout(bar)
-        row.setContentsMargins(40, 2, 8, 2)
-        row.setSpacing(6)
+        outer = QVBoxLayout(bar)
+        outer.setContentsMargins(8 if PHONE_LAYOUT else 40, 2, 8, 2)
+        outer.setSpacing(4)
 
+        # Desktop: one row. Phone: question on top, buttons in a 2×2 grid
+        # (a single row is wider than a phone screen).
+        grid = QGridLayout()
+        grid.setSpacing(6)
         prompt = QLabel("Was this right?")
         prompt.setObjectName("infoLabel")
-        row.addWidget(prompt)
+        if PHONE_LAYOUT:
+            outer.addWidget(prompt)
+        else:
+            grid.addWidget(prompt, 0, 0)
+        outer.addLayout(grid)
+
+        buttons = []
 
         def choose(key):
-            for i in reversed(range(row.count())):
-                w = row.itemAt(i).widget()
-                if w:
-                    w.deleteLater()
+            for w in buttons + [prompt]:
+                w.deleteLater()
             done = QLabel(f"Marked: {options[key]}")
             done.setObjectName("infoLabel")
-            row.addWidget(done)
-            row.addStretch()
+            outer.addWidget(done)
             on_choice(key)
 
-        for key, label in options.items():
+        for i, (key, label) in enumerate(options.items()):
             btn = QPushButton(label)
             btn.setObjectName("navBtn")
             btn.setFixedHeight(26)
             btn.clicked.connect(lambda _=False, k=key: choose(k))
-            row.addWidget(btn)
-        row.addStretch()
+            buttons.append(btn)
+            if PHONE_LAYOUT:
+                grid.addWidget(btn, i // 2, i % 2)
+            else:
+                grid.addWidget(btn, 0, i + 1)
+        if not PHONE_LAYOUT:
+            grid.setColumnStretch(len(options) + 1, 1)
 
         self._messages_layout.insertWidget(self._messages_layout.count() - 1, bar)
         QTimer.singleShot(50, self._scroll_to_bottom)

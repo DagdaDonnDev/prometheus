@@ -1,0 +1,66 @@
+﻿ 1,611,835 KB  .\knowledge_base\simplewiki-latest-pages-articles.xml
+    20,527 KB  .\knowledge_base\army_fm_3_05_70\FM_3-05.70_(FM_21-76)_Survival_-_May_2002.pdf
+    14,398 KB  .\knowledge_base\blacksmithing\practicalblacksm01richuoft.pdf
+     8,472 KB  .\knowledge_base\build\b32172321.pdf
+       409 KB  .\knowledge_base\build\Building with Straw Bales, A Practical Guide for the UK the Ireland by Barbara Jones.txt
+    24,127 KB  .\knowledge_base\build\masonrystructure00spaluoft.pdf
+     9,616 KB  .\knowledge_base\build\practicalcarpen01radfgoog.pdf
+    22,121 KB  .\knowledge_base\chemistry\Chemistry_of_Common_Life_1855.pdf
+   112,562 KB  .\knowledge_base\chemistry\henleystwentieth00hiscrich.pdf
+       725 KB  .\knowledge_base\chemistry\Military Explosives TM 9 1910.txt
+       376 KB  .\knowledge_base\companion\(Epictetus) The Enchiridion.pdf
+    19,330 KB  .\knowledge_base\companion\2015.126777.Understanding-Human-Nature.pdf
+       369 KB  .\knowledge_base\companion\Ethics.pdf
+     9,023 KB  .\knowledge_base\companion\Letters from a Stoic 1.pdf
+    11,246 KB  .\knowledge_base\companion\meditationsofmar00marc.pdf
+        10 KB  .\knowledge_base\companion\psychology_and_meaning.md
+    60,367 KB  .\knowledge_base\companion\theprinciplesofp00jameuoft.pdf
+       316 KB  .\knowledge_base\companion\Viktor-Emil-Frankl-Mans-Search-for-Meaning.pdf
+    44,255 KB  .\knowledge_base\companion\Vita Booklet - Final.pdf
+    26,136 KB  .\knowledge_base\companion\waldenorlifeinwo1854thor.pdf
+    36,368 KB  .\knowledge_base\electronics\2015.458758.Storage-Batteries-Ed-4th_text.pdf
+       297 KB  .\knowledge_base\electronics\Electricity for the farm.txt
+    22,463 KB  .\knowledge_base\electronics\steamboilersthei00parsuoft.pdf
+    43,195 KB  .\knowledge_base\electronics\wirelesstelegrap00eccl.pdf
+        15 KB  .\knowledge_base\emergency_medicine\emergency_procedures.md
+     1,395 KB  .\knowledge_base\farming\farmbul1424.pdf
+    24,164 KB  .\knowledge_base\farming\farmmechanics00craw.pdf
+    29,418 KB  .\knowledge_base\farming\feedsfeedingabr00henr.pdf
+    24,000 KB  .\knowledge_base\farming\Homevegetablega00Kruh.pdf
+     2,251 KB  .\knowledge_base\farming\practical_beekeeping_1907.pdf
+    10,337 KB  .\knowledge_base\farming\tenacresenoughpr00morriala.pdf
+        16 KB  .\knowledge_base\food_preservation\fermentation_and_alcohol.md
+     2,968 KB  .\knowledge_base\food_preservation\preservationoffo00hayerich.pdf
+     2,397 KB  .\knowledge_base\medical\FM4-25.11.pdf
+     2,793 KB  .\knowledge_base\medical\FM_21-10_Field_Hygiene_Sanitation.pdf
+     6,098 KB  .\knowledge_base\navigation\FM5-10.pdf
+    19,374 KB  .\knowledge_base\navigation\manualofmilitary00grea.pdf
+        10 KB  .\knowledge_base\navigation\navigation_complete.md
+    30,611 KB  .\knowledge_base\navigation\textbookonnaviga00gillrich.pdf
+    71,808 KB  .\knowledge_base\nuclear_survival\NuclearWarSurvivalSkills_-_Cresson_Kearny_-_1987.pdf
+    43,324 KB  .\knowledge_base\plants_temperate\americanmedicina00mill.pdf
+    43,324 KB  .\knowledge_base\plants_temperate\American_Medicinal_Plants_1892.pdf
+    13,176 KB  .\knowledge_base\plants_temperate\bookofherbs00nort.pdf
+    19,588 KB  .\knowledge_base\plants_temperate\ediblewildplants031709mbp.pdf
+         3 KB  .\knowledge_base\scientific_reference\chemistry_reference.md
+         1 KB  .\knowledge_base\scientific_reference\computer_science_reference.md
+         3 KB  .\knowledge_base\scientific_reference\electronics_reference.md
+         4 KB  .\knowledge_base\scientific_reference\fundamental_laws_physics.md
+         2 KB  .\knowledge_base\scientific_reference\mathematics_reference.md
+         3 KB  .\knowledge_base\scientific_reference\mechanics_and_materials.md
+         3 KB  .\knowledge_base\scientific_reference\navigation_reference.md
+         1 KB  .\knowledge_base\scientific_reference\universal_constants.md
+         9 KB  .\knowledge_base\soap_making\soap_from_ash_and_fat.md
+       198 KB  .\knowledge_base\soap_making\The Art Of Soap Making - A Complete Introduction To The History And Craft Of Fine Soapmaking.txt
+    17,673 KB  .\knowledge_base\soil_maps\The-Soil-Survey-Manual.pdf
+    26,922 KB  .\knowledge_base\survival\artoftravelorshi00galt.pdf
+    32,814 KB  .\knowledge_base\survival\bookofwoodcrafti01seto.pdf
+       768 KB  .\knowledge_base\survival\Boy_Scout_Handbook_1911.txt
+     2,845 KB  .\knowledge_base\survival\FM21-10_2000.pdf
+     2,953 KB  .\knowledge_base\survival\FM21-76_SurvivalManual.pdf
+    27,529 KB  .\knowledge_base\survivor_library\cu31924004414318.pdf
+     1,127 KB  .\knowledge_base\survivor_library\farmbul1334rev1940.pdf
+        10 KB  .\knowledge_base\water_purification\water_purification_complete.md
+     9,129 KB  .\knowledge_base\weather_patterns\Weather_forecasting_from_synoptic_charts_(IA_weatherforecasti71henr).pdf
+     7,372 KB  .\knowledge_base\where_no_dentist\Where_There_is_No_Dentist_Murray_Dickson.pdf
+     8,483 KB  .\knowledge_base\where_no_doctor\14.DavidWerner-WhereThereIsNoDoctor.pdf

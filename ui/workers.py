@@ -9,6 +9,7 @@ from core.llm import LLMEngine
 from core.rag import KnowledgeBase
 from core.stt import STTEngine
 from core.config import Config
+from core.pipeline import QueryPipeline
 
 
 class LLMWorker(QThread):
@@ -46,14 +47,12 @@ class TrainingWorker(QThread):
 
     Signals:
       derivation_done(dict)     DERIVED or NEEDS_DATA — show it
-      fallback_requested(str)   use the Knowledge Path instead (reason given)
+      fallback_requested(dict)  use the Knowledge Path instead (result has the reason)
       derivation_error(str)     engine or Ollama failed — also falls back
     """
     derivation_done    = Signal(dict)
-    fallback_requested = Signal(str)
+    fallback_requested = Signal(dict)
     derivation_error   = Signal(str)
-
-    SHOW_STATUSES = {"DERIVED", "NEEDS_DATA"}
 
     def __init__(self, engine, query: str, tab_id: str):
         super().__init__()
@@ -68,11 +67,10 @@ class TrainingWorker(QThread):
             self.derivation_error.emit(str(e))
             return
 
-        if result.get("status") in self.SHOW_STATUSES:
+        if QueryPipeline.training_should_show(result):
             self.derivation_done.emit(result)
         else:
-            reason = result.get("reason", "")
-            self.fallback_requested.emit(f"{result.get('status', '')}|{reason}")
+            self.fallback_requested.emit(result)
 
 
 class InitWorker(QThread):

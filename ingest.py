@@ -8,6 +8,8 @@ Usage:
     python ingest.py --source army      # ingest specific source
     python ingest.py --rebuild          # clear and rebuild
     python ingest.py --stats            # show knowledge base statistics
+    python ingest.py --download-wikipedia   # fetch + ingest Simple English Wikipedia
+    python ingest.py --wikipedia FILE       # ingest a dump you already have
 """
 
 import os
@@ -312,6 +314,17 @@ class Ingester:
         total_chunks = 0
         total_images = 0
         skipped = 0
+        duplicates = 0
+
+        # Step 0: tidy the index before adding anything new
+        #   - forget files that were deleted from knowledge_base/
+        #   - find the same book indexed twice under different names
+        #     (it would count as two independent sources)
+        removed, twins = self._tidy_index()
+        self._seen_content = {
+            e["content_sha"]: e["file"]
+            for e in self.processed.values() if e.get("content_sha")
+        }
 
         for domain_dir in sorted(KNOWLEDGE_PATH.iterdir()):
             if not domain_dir.is_dir():
@@ -339,6 +352,15 @@ class Ingester:
                 if file_hash in self.processed and not self.rebuild:
                     skipped += 1
                     continue
+
+                # Same contents as a file already indexed? Skip it.
+                content_sha = self._content_hash(file_path)
+                twin = self._seen_content.get(content_sha)
+                if twin and twin != str(file_path) and Path(twin).exists():
+                    print(f"  ⚠ Skipped {file_path.name} — same contents as {Path(twin).name}")
+                    duplicates += 1
+                    continue
+                self._seen_content[content_sha] = str(file_path)
 
                 is_pdf = file_path.suffix.lower() == ".pdf"
                 source = file_path.stem.replace(" ", "_").lower()
@@ -379,12 +401,17 @@ class Ingester:
                     continue
 
                 self.all_chunks.extend(chunks)
+                # An edited file gets a new key — drop its old entry
+                for old_key in [k for k, e in self.processed.items()
+                                if e.get("file") == str(file_path)]:
+                    del self.processed[old_key]
                 self.processed[file_hash] = {
                     "file": str(file_path),
                     "source": source,
                     "domain": domain,
                     "chunks": len(chunks),
                     "images": img_count,
+                    "content_sha": content_sha,
                 }
 
                 total_files += 1
@@ -395,6 +422,11 @@ class Ingester:
         print(f"\n📊 Summary:")
         print(f"  Files processed: {total_files}")
         print(f"  Files skipped (already indexed): {skipped}")
+        if duplicates:
+            print(f"  Duplicate files skipped: {duplicates} "
+                  f"(delete the extra copies to stop this message)")
+        if removed:
+            print(f"  Deleted files removed from the index: {removed}")
         print(f"  New chunks: {total_chunks}")
         if total_images:
             print(f"  Page images extracted: {total_images}")
@@ -406,11 +438,28 @@ class Ingester:
         print("\n✅ Ingestion complete.")
 
     def _embed_and_store(self):
-        """Embed all chunks and store in ChromaDB."""
+        """
+        Store chunks for search.
+
+        Step 1: always write the JSON keyword index — it's the fallback when
+                the vector DB isn't available, and the Training Path scans it
+                directly for its anchors.
+        Step 2: if the vector DB is available, replace each re-indexed file's
+                old chunks and embed the new ones.
+        """
+        self._save_json_fallback()
         if not self.collection or not self.embedder:
-            # Save as JSON fallback
-            self._save_json_fallback()
             return
+
+        # Remove old chunks for every file being re-indexed, so an edited file
+        # doesn't keep stale text (or extra chunks if it got shorter)
+        for domain, source in sorted({(c["domain"], c["source"]) for c in self.all_chunks}):
+            try:
+                self.collection.delete(where={"$and": [
+                    {"domain": {"$eq": domain}}, {"source": {"$eq": source}},
+                ]})
+            except Exception:
+                pass
 
         print(f"\nEmbedding {len(self.all_chunks)} chunks...")
 
@@ -431,30 +480,13 @@ class Ingester:
                 for c in batch
             ]
 
-            # Check for duplicate IDs and make unique
-            existing = set()
-            try:
-                existing_data = self.collection.get(ids=ids)
-                existing = set(existing_data["ids"])
-            except Exception:
-                pass
-
-            # Filter out already-stored chunks
-            new_batch = [(t, i, m) for t, i, m in zip(texts, ids, metadatas)
-                        if i not in existing]
-
-            if not new_batch:
-                continue
-
-            new_texts, new_ids, new_metas = zip(*new_batch)
-
-            embeddings = self.embedder.encode(list(new_texts)).tolist()
-
-            self.collection.add(
-                documents=list(new_texts),
+            # upsert, not add: a chunk id that somehow survived is replaced, not skipped
+            embeddings = self.embedder.encode(texts).tolist()
+            self.collection.upsert(
+                documents=texts,
                 embeddings=embeddings,
-                ids=list(new_ids),
-                metadatas=list(new_metas)
+                ids=ids,
+                metadatas=metadatas,
             )
 
             pct = min(100, int(((i + batch_size) / total) * 100))
@@ -467,17 +499,106 @@ class Ingester:
         fallback_path = Path("memory/chunks_fallback.json")
         fallback_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Load existing
+        # Step 1: start from the existing index (empty on --rebuild)
         existing = []
-        if fallback_path.exists():
+        if fallback_path.exists() and not self.rebuild:
             try:
                 existing = json.loads(fallback_path.read_text())
             except Exception:
                 pass
 
-        existing.extend(self.all_chunks)
+        # Step 2: drop old chunks of every file being re-indexed, then add the new ones
+        reindexed = {(c["domain"], c["source"]) for c in self.all_chunks}
+        existing = [c for c in existing
+                    if (c.get("domain"), c.get("source")) not in reindexed]
+        # Wikipedia is huge and lowest-trust: when the vector DB holds it, keep it
+        # out of the keyword index (that index is loaded into RAM at startup)
+        new_chunks = self.all_chunks
+        if self.collection is not None:
+            new_chunks = [c for c in new_chunks if c.get("domain") != "wikipedia"]
+            existing = [c for c in existing if c.get("domain") != "wikipedia"]
+        existing.extend(new_chunks)
         fallback_path.write_text(json.dumps(existing))
         print(f"✓ Saved {len(existing)} chunks to JSON fallback")
+
+    @staticmethod
+    def _content_hash(path: Path) -> str:
+        """SHA-256 of the file's bytes — the same book under any name matches."""
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for block in iter(lambda: f.read(1 << 20), b""):
+                h.update(block)
+        return h.hexdigest()
+
+    def _tidy_index(self):
+        """
+        Returns (files removed, duplicate copies removed).
+
+        Step 1: entries whose file no longer exists → remove their chunks.
+        Step 2: fill in content fingerprints for entries indexed before v22.
+        Step 3: two entries with the same fingerprint → keep the first path
+                (alphabetical), remove the other's chunks.
+        """
+        if self.rebuild or not self.processed:
+            return 0, 0
+
+        to_purge = set()       # (domain, source) pairs to drop from both stores
+        removed = twins = 0
+
+        # Step 1
+        for key, e in list(self.processed.items()):
+            if not Path(e.get("file", "")).exists():
+                to_purge.add((e.get("domain"), e.get("source")))
+                del self.processed[key]
+                removed += 1
+
+        # Step 2
+        for e in self.processed.values():
+            if not e.get("content_sha"):
+                try:
+                    e["content_sha"] = self._content_hash(Path(e["file"]))
+                except OSError:
+                    pass
+
+        # Step 3
+        by_sha = {}
+        for key, e in sorted(self.processed.items(), key=lambda kv: kv[1].get("file", "")):
+            sha = e.get("content_sha")
+            if not sha:
+                continue
+            if sha in by_sha:
+                print(f"  ⚠ {Path(e['file']).name} is the same file as "
+                      f"{Path(by_sha[sha]).name} — removing the extra copy from the index")
+                to_purge.add((e.get("domain"), e.get("source")))
+                del self.processed[key]
+                twins += 1
+            else:
+                by_sha[sha] = e["file"]
+
+        if to_purge:
+            self._purge(to_purge)
+            self._save_processed()
+        return removed, twins
+
+    def _purge(self, pairs):
+        """Remove every chunk of the given (domain, source) files from both stores."""
+        fallback_path = Path("memory/chunks_fallback.json")
+        if fallback_path.exists():
+            try:
+                chunks = json.loads(fallback_path.read_text())
+                chunks = [c for c in chunks
+                          if (c.get("domain"), c.get("source")) not in pairs]
+                fallback_path.write_text(json.dumps(chunks))
+            except Exception:
+                pass
+        if self.collection:
+            for domain, source in pairs:
+                try:
+                    self.collection.delete(where={"$and": [
+                        {"domain": {"$eq": domain}}, {"source": {"$eq": source}},
+                    ]})
+                except Exception:
+                    pass
 
     def _file_hash(self, path: Path) -> str:
         """Get a hash of file path + modification time."""
@@ -552,29 +673,112 @@ def create_sample_knowledge_base():
     print(f"✓ Created {len(domains)} domain folders")
 
 
-def parse_wikipedia_dump(dump_path: Path, output_dir: Path,
-                          max_articles: int = 0,
-                          min_words: int = 100) -> int:
+# ── Wikipedia ──────────────────────────────────────────────────────────────
+
+WIKI_BASE_URL  = "https://dumps.wikimedia.org/simplewiki/latest/"
+WIKI_DUMP_NAME = "simplewiki-latest-pages-articles.xml.bz2"
+WIKI_SUMS_NAME = "simplewiki-latest-sha1sums.txt"
+WIKI_DOWNLOAD_DIR = Path("prometheus_setup")
+# Wikimedia asks automated clients for a descriptive User-Agent
+WIKI_USER_AGENT = "Prometheus-offline-knowledge-ingest/1.0 (+https://github.com/DagdaDonnDev/prometheus)"
+
+
+def download_wikipedia(dest_dir: Path = WIKI_DOWNLOAD_DIR,
+                       base_url: str = WIKI_BASE_URL) -> Optional[Path]:
     """
-    Parse a Wikipedia XML dump file and extract articles as text files.
-    Handles both raw XML and bz2-compressed dumps.
+    Download the latest Simple English Wikipedia dump.
 
-    Args:
-        dump_path:    Path to .xml or .xml.bz2 Wikipedia dump
-        output_dir:   Where to write extracted .txt files
-        max_articles: Stop after this many articles (0 = all)
-        min_words:    Skip articles shorter than this
+    Step 1: download to <name>.part, resuming if a previous attempt was cut off
+    Step 2: check the SHA-1 Wikimedia publishes (skipped with a warning if
+            the checksum list can't be fetched)
+    Step 3: rename to the final name, replacing any older dump
 
-    Returns:
-        Number of articles extracted
+    Returns the dump path, or None if the download failed.
+    """
+    import requests
 
-    Download Simple English Wikipedia dump from:
-        https://dumps.wikimedia.org/simplewiki/latest/
-        File: simplewiki-latest-articles.xml.bz2  (~150MB)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    final = dest_dir / WIKI_DUMP_NAME
+    part = dest_dir / (WIKI_DUMP_NAME + ".part")
+    headers = {"User-Agent": WIKI_USER_AGENT}
 
-    Full English Wikipedia:
-        https://dumps.wikimedia.org/enwiki/latest/
-        File: enwiki-latest-articles.xml.bz2  (~22GB uncompressed)
+    # Step 1: download (resume from .part if present)
+    have = part.stat().st_size if part.exists() else 0
+    if have:
+        headers["Range"] = f"bytes={have}-"
+        print(f"  Resuming download at {have / 1024 / 1024:.0f} MB")
+    try:
+        with requests.get(base_url + WIKI_DUMP_NAME, headers=headers,
+                          stream=True, timeout=60) as r:
+            if r.status_code == 416:          # .part is already complete
+                pass
+            elif r.status_code not in (200, 206):
+                print(f"  ✗ Download failed: HTTP {r.status_code}")
+                return None
+            else:
+                if r.status_code == 200 and have:
+                    have = 0                  # server ignored Range — start over
+                total = have + int(r.headers.get("Content-Length", 0) or 0)
+                done = have
+                with open(part, "ab" if have else "wb") as f:
+                    for block in r.iter_content(1 << 20):
+                        f.write(block)
+                        done += len(block)
+                        if total:
+                            print(f"  Downloaded {done / 1024 / 1024:,.0f} / "
+                                  f"{total / 1024 / 1024:,.0f} MB", end="\r")
+                print()
+    except requests.RequestException as e:
+        print(f"\n  ✗ Download interrupted: {e}\n"
+              f"    Run the same command again to resume.")
+        return None
+
+    # Step 2: verify
+    expected = None
+    try:
+        sums = requests.get(base_url + WIKI_SUMS_NAME,
+                            headers={"User-Agent": WIKI_USER_AGENT}, timeout=30)
+        if sums.ok:
+            for line in sums.text.splitlines():
+                parts = line.split()
+                if len(parts) == 2 and parts[1].endswith("-pages-articles.xml.bz2"):
+                    expected = parts[0]
+    except requests.RequestException:
+        pass
+
+    if expected:
+        h = hashlib.sha1()
+        with open(part, "rb") as f:
+            for block in iter(lambda: f.read(1 << 20), b""):
+                h.update(block)
+        if h.hexdigest() != expected:
+            print("  ✗ Checksum doesn't match — the file is damaged. Deleting it; "
+                  "run the command again to re-download.")
+            part.unlink()
+            return None
+        print("  ✓ Checksum verified")
+    else:
+        print("  ⚠ Couldn't fetch Wikimedia's checksum list — file not verified")
+
+    # Step 3: replace any older dump
+    part.replace(final)
+    print(f"  ✓ Saved {final} ({final.stat().st_size / 1024 / 1024:,.0f} MB)")
+    return final
+
+
+def parse_wikipedia_dump(dump_path: Path, output_dir: Path,
+                         max_articles: int = 0,
+                         min_words: int = 100) -> int:
+    """
+    Extract articles from a Wikipedia XML dump (.xml or .xml.bz2) as .txt files.
+
+    - Only real articles (namespace 0), no redirects, nothing under min_words.
+    - Works with any MediaWiki export schema version (the namespace is stripped
+      generically — the old code expected one exact version and found nothing).
+    - A refresh rewrites only articles whose text changed (so ingest only
+      re-indexes those) and deletes articles that are no longer in the dump.
+
+    Returns the number of articles extracted.
     """
     import bz2
     import re
@@ -582,12 +786,14 @@ def parse_wikipedia_dump(dump_path: Path, output_dir: Path,
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Namespace used in Wikipedia XML
-    NS = "http://www.mediawiki.org/xml/DTD/Export-0.10"
-
     def clean_wikitext(text: str) -> str:
         """Strip Wikipedia markup to plain text."""
-        # Remove templates {{...}}
+        # Step 1: references first, before tags are stripped (or citation text leaks in)
+        text = re.sub(r'<ref[^>]*/>', '', text)
+        text = re.sub(r'<ref[^>]*>.*?</ref>', '', text, flags=re.DOTALL)
+        text = re.sub(r'<!--.*?-->', '', text, flags=re.DOTALL)
+
+        # Step 2: templates {{...}} (nested)
         depth = 0
         result = []
         i = 0
@@ -605,162 +811,144 @@ def parse_wikipedia_dump(dump_path: Path, output_dir: Path,
                 i += 1
         text = "".join(result)
 
-        # Remove [[File:...]] and [[Image:...]]
+        # Step 3: files, images, categories; links → their text
         text = re.sub(r'\[\[(?:File|Image|Category):[^\]]*\]\]', '', text,
                       flags=re.IGNORECASE)
-
-        # Convert [[link|display]] to display, [[link]] to link
         text = re.sub(r'\[\[(?:[^|\]]+\|)?([^\]]+)\]\]', r'\1', text)
-
-        # Remove external links [url text] → text
         text = re.sub(r'\[https?://\S+\s+([^\]]+)\]', r'\1', text)
         text = re.sub(r'\[https?://\S+\]', '', text)
 
-        # Remove HTML tags
+        # Step 4: HTML tags and tables
         text = re.sub(r'<[^>]+>', ' ', text)
-        text = re.sub(r'&lt;[^&]+&gt;', ' ', text)
-
-        # Remove table markup
         text = re.sub(r'^\s*[|!].*$', '', text, flags=re.MULTILINE)
         text = re.sub(r'^\s*\{\|.*$', '', text, flags=re.MULTILINE)
         text = re.sub(r'^\s*\|\}.*$', '', text, flags=re.MULTILINE)
 
-        # Remove section headers formatting (keep text)
+        # Step 5: headings and bold/italic markup (keep the words)
         text = re.sub(r'={2,}([^=]+)={2,}', r'\1', text)
-
-        # Remove bold/italic markup
         text = re.sub(r"'{2,}", '', text)
 
-        # Remove reference markers
-        text = re.sub(r'<ref[^/]*/>', '', text)
-        text = re.sub(r'<ref[^>]*>.*?</ref>', '', text, flags=re.DOTALL)
-
-        # Normalize whitespace
+        # Step 6: whitespace
         text = re.sub(r'\n{3,}', '\n\n', text)
         text = re.sub(r'[ \t]+', ' ', text)
-
         return text.strip()
 
     def safe_filename(title: str) -> str:
-        """Convert article title to safe filename."""
         safe = re.sub(r'[^\w\s-]', '', title)
         safe = re.sub(r'\s+', '_', safe.strip())
         return safe[:100] + ".txt"
 
-    # Open dump file (handle bz2 compression)
     print(f"  Opening dump: {dump_path.name}")
     if dump_path.suffix == ".bz2":
         file_obj = bz2.open(dump_path, "rt", encoding="utf-8", errors="replace")
     else:
         file_obj = open(dump_path, "r", encoding="utf-8", errors="replace")
 
-    count = 0
-    skipped = 0
-    redirects = 0
-
-    print(f"  Parsing XML stream...")
-    print(f"  (This may take several minutes for large dumps)")
+    count = skipped = redirects = unchanged = 0
+    written = set()
+    print("  Parsing XML stream (several minutes for a full dump)…")
 
     try:
-        # Use iterparse for memory efficiency — don't load entire XML
-        context = ET.iterparse(file_obj, events=("end",))
+        context = ET.iterparse(file_obj, events=("start", "end"))
+        _, root = next(context)            # keep a handle so memory can be freed
 
-        current_title = ""
-        current_text = ""
-
+        title, ns, text = "", "", ""
         for event, elem in context:
-            tag = elem.tag.replace(f"{{{NS}}}", "")
+            if event != "end":
+                continue
+            tag = elem.tag.rsplit("}", 1)[-1]   # strip any schema namespace
 
             if tag == "title":
-                current_title = elem.text or ""
-
+                title = elem.text or ""
+            elif tag == "ns":
+                ns = (elem.text or "").strip()
             elif tag == "text":
-                current_text = elem.text or ""
-
+                text = elem.text or ""
             elif tag == "page":
-                # Skip redirects
-                if current_text.strip().upper().startswith("#REDIRECT"):
+                keep = True
+                if ns != "0":
+                    keep = False                                  # talk, user, project pages…
+                elif text.lstrip().upper().startswith("#REDIRECT"):
                     redirects += 1
-                    elem.clear()
-                    continue
+                    keep = False
 
-                # Skip non-article namespaces (Talk:, User:, etc.)
-                if ":" in current_title and not current_title.startswith("Wikipedia:"):
-                    elem.clear()
-                    continue
+                if keep:
+                    clean = clean_wikitext(text)
+                    if len(clean.split()) < min_words:
+                        skipped += 1
+                    else:
+                        name = safe_filename(title)
+                        out_path = output_dir / name
+                        content = f"# {title}\n\n{clean}"
+                        # Only rewrite changed articles, so ingest re-indexes only those
+                        if out_path.exists() and out_path.read_text(
+                                encoding="utf-8", errors="replace") == content:
+                            unchanged += 1
+                        else:
+                            out_path.write_text(content, encoding="utf-8")
+                        written.add(name)
+                        count += 1
+                        if count % 1000 == 0:
+                            print(f"  Extracted: {count:,} articles…", end="\r")
 
-                # Clean the wikitext
-                clean = clean_wikitext(current_text)
-                words = clean.split()
-
-                if len(words) < min_words:
-                    skipped += 1
-                    elem.clear()
-                    continue
-
-                # Write to file
-                filename = safe_filename(current_title)
-                out_path = output_dir / filename
-
-                # Add title as first line
-                content = f"# {current_title}\n\n{clean}"
-
-                out_path.write_text(content, encoding="utf-8")
-                count += 1
-
-                if count % 1000 == 0:
-                    print(f"  Extracted: {count:,} articles "
-                          f"({redirects:,} redirects skipped)...",
-                          end="\r")
-
-                if max_articles > 0 and count >= max_articles:
+                title, ns, text = "", "", ""
+                root.clear()                    # free everything parsed so far
+                if max_articles and count >= max_articles:
                     print(f"\n  Reached limit of {max_articles:,} articles.")
                     break
-
-                # Free memory
-                elem.clear()
-
     finally:
         file_obj.close()
 
-    print(f"\n  ✓ Extracted {count:,} articles "
-          f"({redirects:,} redirects, {skipped:,} too short)")
+    # Articles no longer in the dump (only on a full run — a limited run
+    # would otherwise delete everything past the limit)
+    removed = 0
+    if not max_articles:
+        for old in output_dir.glob("*.txt"):
+            if old.name not in written:
+                old.unlink()
+                removed += 1
+
+    print(f"\n  ✓ {count:,} articles ({unchanged:,} unchanged, {removed:,} removed; "
+          f"{redirects:,} redirects and {skipped:,} short pages skipped)")
     return count
 
 
-def ingest_wikipedia(dump_path: str, max_articles: int = 0):
+def ingest_wikipedia(dump_path: Optional[str] = None, max_articles: int = 0,
+                     download: bool = False) -> bool:
     """
-    Ingest a Wikipedia XML dump into the knowledge base.
+    Extract a Wikipedia dump into knowledge_base/wikipedia/ and index it.
 
-    Usage:
-        python ingest.py --wikipedia simplewiki-latest-articles.xml.bz2
-        python ingest.py --wikipedia enwiki-latest-articles.xml.bz2 --max-articles 100000
+        python ingest.py --download-wikipedia            # fetch latest, then ingest
+        python ingest.py --wikipedia FILE.xml(.bz2)      # use a dump you already have
     """
-    dump = Path(dump_path)
-    if not dump.exists():
-        print(f"Dump file not found: {dump_path}")
-        print("\nDownload Simple English Wikipedia from:")
-        print("  https://dumps.wikimedia.org/simplewiki/latest/")
-        print("  File: simplewiki-latest-articles.xml.bz2 (~150MB)")
-        return
+    if download:
+        print("\n🌐 Downloading the latest Simple English Wikipedia dump")
+        dump = download_wikipedia()
+        if not dump:
+            return False
+    else:
+        dump = Path(dump_path)
+        if not dump.exists():
+            print(f"Dump file not found: {dump_path}\n"
+                  f"Download it with:  python ingest.py --download-wikipedia")
+            return False
+
+    if KNOWLEDGE_PATH.resolve() in dump.resolve().parents:
+        print(f"  ⚠ {dump.name} is inside {KNOWLEDGE_PATH}/ — move it to "
+              f"{WIKI_DOWNLOAD_DIR}/ so desktop builds don't copy it.")
 
     output_dir = KNOWLEDGE_PATH / "wikipedia"
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    print(f"\n📖 Processing Wikipedia dump: {dump.name}")
-    print(f"   Output: {output_dir}")
-    if max_articles:
-        print(f"   Limit:  {max_articles:,} articles")
-    else:
-        print(f"   Limit:  None (all articles)")
-    print()
-
+    print(f"\n📖 Extracting {dump.name} → {output_dir}"
+          + (f" (first {max_articles:,} articles)" if max_articles else ""))
     count = parse_wikipedia_dump(dump, output_dir, max_articles=max_articles)
+    if not count:
+        print("  ✗ No articles found — is this a pages-articles dump?")
+        return False
 
-    print(f"\nIndexing {count:,} Wikipedia articles into vector database...")
-    ingester = Ingester(rebuild=False)
-    ingester.ingest_all(source_filter="wikipedia")
+    print(f"\nIndexing Wikipedia articles…")
+    Ingester(rebuild=False).ingest_all(source_filter="wikipedia")
     print("\n✅ Wikipedia ingestion complete.")
+    return True
 
 
 def main():
@@ -787,6 +975,11 @@ def main():
         help="Ingest a Wikipedia XML dump file (.xml or .xml.bz2)"
     )
     parser.add_argument(
+        "--download-wikipedia",
+        action="store_true",
+        help="Download the latest Simple English Wikipedia dump, then ingest it"
+    )
+    parser.add_argument(
         "--max-articles",
         type=int,
         default=0,
@@ -804,9 +997,10 @@ def main():
         create_sample_knowledge_base()
         return
 
-    if args.wikipedia:
-        ingest_wikipedia(args.wikipedia, max_articles=args.max_articles)
-        return
+    if args.wikipedia or args.download_wikipedia:
+        ok = ingest_wikipedia(args.wikipedia, max_articles=args.max_articles,
+                              download=args.download_wikipedia)
+        sys.exit(0 if ok else 1)
 
     if args.stats:
         _print_stats()

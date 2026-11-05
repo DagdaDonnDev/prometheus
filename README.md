@@ -123,37 +123,65 @@ Output: `dist/Prometheus.exe` (~150–300MB, self-contained).
 Knowledge base, voices, and memory sit alongside the exe — not bundled inside —
 so you can update knowledge without rebuilding.
 
-### Android APK
+### Android APK — same app, built with Qt for Python (shiboken6)
+The phone runs the same `main.py`, `core/` and `ui/` as desktop, so every
+feature and fix lands on both. On a phone the layout switches automatically:
+the header and tabs scroll sideways, ◀ Info swaps the chat for the situation
+panel, dialogs open full screen, and the verdict buttons sit in a 2×2 grid.
+Preview it on desktop with `PROMETHEUS_PHONE_LAYOUT=1 python main.py`.
+
+You need the PySide6 and shiboken6 **Android wheels** (e.g.
+`PySide6-6.x.y-…-android_aarch64.whl`), the same version as the PySide6
+installed on the build computer, plus JDK 17. The Android NDK/SDK are
+fetched by the deploy tool if you don't give them.
+
 ```bash
-# Linux or macOS required (or use WSL2 on Windows)
-python build_apk.py --setup      # install dependencies (first time only)
-python build_apk.py --debug      # build debug APK (~20–40 min first run)
-python build_apk.py --install    # push to connected device via ADB
+# Linux or macOS (on Windows use WSL2)
+python build_apk.py --setup                        # first time only
+python build_apk.py --debug --wheels ~/qtwheels    # folder with both wheels
+python build_apk.py --install                      # push to a phone via ADB
 
-# Windows users — build in the cloud for free:
-python build_apk.py --github     # generates GitHub Actions workflow
-# Push to GitHub → Actions tab → APK builds automatically
+# Emulator instead of a real phone:
+python build_apk.py --debug --wheels ~/qtwheels --arch x86_64
+
+# Build on GitHub instead (free):
+python build_apk.py --github   # writes .github/workflows/build_apk.yml
 ```
+Without `--wheels`, it looks in `./wheels`, `~/wheels`, `~/qtwheels`,
+`~/Downloads` and `~/.pyside6_android_deploy`.
 
-**Android LLM options:**
-- **Recommended:** Run Ollama on your laptop/Pi on the same WiFi.
-  Set the IP in app Settings → Ollama URL (e.g. `http://192.168.1.100:11434`)
-- **Standalone:** Add `llama-cpp-python` to buildozer.spec requirements for fully on-device inference
+The APK includes the knowledge base text and the stylesheet. It never includes
+`memory/`, so your conversations and personal documents stay off the build.
+
+**On the phone:** run Ollama on a laptop or Pi on the same WiFi and set
+⚙ Settings → Ollama URL (e.g. `http://192.168.1.100:11434`). Start Ollama
+with `OLLAMA_HOST=0.0.0.0 ollama serve` so the phone can reach it.
+Voice (Piper, Faster-Whisper) is desktop-only for now.
 
 ---
 
-## Wikipedia (Optional — Adds 230,000 Articles)
+## Wikipedia (Optional — Simple English, ~360MB download)
 
 ```bash
-# Download Simple English Wikipedia from:
-# https://dumps.wikimedia.org/simplewiki/latest/
-# File: simplewiki-latest-articles.xml.bz2 (~150MB compressed)
-
-python ingest.py --wikipedia simplewiki-latest-articles.xml.bz2
-
-# Limit articles for faster processing:
-python ingest.py --wikipedia simplewiki-latest-articles.xml.bz2 --max-articles 50000
+python ingest.py --download-wikipedia                      # fetch the latest dump, extract, index
+python ingest.py --download-wikipedia --max-articles 50000 # quicker first pass
+python ingest.py --wikipedia path/to/dump.xml.bz2          # use a dump you already have
 ```
+`--download-wikipedia` fetches `simplewiki-latest-pages-articles.xml.bz2` from
+dumps.wikimedia.org into `prometheus_setup/`, resumes if the download is cut off,
+and checks it against Wikimedia's published SHA-1. Run it again any time to
+refresh: only changed articles are re-indexed, and articles removed from
+Wikipedia are removed here too (on a full run, not with `--max-articles`).
+
+- Only real articles are kept — no talk/user/project pages, redirects or stubs
+  under 100 words.
+- The uncompressed `.xml` works with `--wikipedia` too.
+- Keep dumps **outside** `knowledge_base/`: the desktop build copies that folder
+  next to the exe. Extracted articles go to `knowledge_base/wikipedia/`
+  (not committed).
+- Wikipedia is tier 3 — lowest trust, never used for medical answers. With
+  ChromaDB installed it lives only in the vector index, so it isn't loaded into
+  memory at startup.
 
 ---
 
@@ -197,9 +225,8 @@ Included in the repository:
 |--------|---------|
 | `scientific_reference/` | 8 files of universal laws and constants — physics, electronics, chemistry, mechanics and materials, navigation, mathematics, computer science, constants. The anchor source for the Training Path. |
 
-Written for earlier builds but **not currently in the repository** (the
-`knowledge_base/` folder used to be git-ignored, so these were never committed —
-they need rewriting or restoring from a local copy):
+Hand-written guides (committed — `.gitignore` keeps every `.md` in a domain
+folder and leaves downloaded books out):
 
 | Folder | Contents |
 |------|---------|
@@ -415,6 +442,13 @@ python ingest.py --init                           # create folder structure only
 cleaner, keeps formulas intact (`=`, `+`, `×`, `²` used to be stripped). For the
 formula fix to apply to sources indexed earlier, run `python ingest.py --rebuild`.
 
+Re-running `ingest.py` keeps the index matching the folder:
+- an edited file's old entries are replaced, not duplicated;
+- a deleted file's entries are removed;
+- the same file under two names (same contents) is indexed once — otherwise one
+  book would count as two independent sources. Delete the extra copy to stop the
+  warning.
+
 ---
 
 ## Project Structure
@@ -428,12 +462,14 @@ prometheus/
 ├── ingest.py                  # Knowledge base indexing pipeline
 ├── generate_reference.py      # Printable emergency PDF generator
 ├── build_exe.py               # EXE builder (Windows/Linux/Mac)
-├── build_apk.py               # APK builder (Android)
+├── build_apk.py               # APK builder (Android, pyside6-android-deploy)
 ├── requirements.txt
 ├── README.md
 ├── CLAUDE.md                  # Working notes for AI-assisted development
 │
 ├── core/
+│   ├── pipeline.py            # Decision layers in one place (no UI code)
+│   ├── platform_info.py       # Android / phone-layout detection
 │   ├── intent_router.py       # 10 intents, domain tiers, Training Path flag
 │   ├── rag.py                 # Tiered knowledge search, image lookup
 │   ├── sufficiency_gate.py    # SUFFICIENT / WEAK / CONFLICTING / NONE
@@ -463,6 +499,7 @@ prometheus/
 │
 ├── ui/
 │   ├── main_window.py         # Window, query fork, both paths
+│   ├── layout_helpers.py      # Desktop vs phone dialog sizing
 │   ├── workers.py             # LLMWorker, TrainingWorker, InitWorker
 │   ├── chat_view.py           # Messages, timing stamp, verdict row, images
 │   ├── dev_panel.py           # Ctrl+D observability

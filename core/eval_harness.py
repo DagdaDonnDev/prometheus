@@ -17,6 +17,7 @@ from typing import Callable, Optional, List
 from dataclasses import dataclass
 from core.intent_router import IntentRouter, Intent
 from core.decision_gate import DecisionGate, ResponseMode
+from core.sufficiency_gate import SourceSufficiencyGate, SufficiencyResult, Sufficiency
 
 
 @dataclass
@@ -246,6 +247,7 @@ class EvalHarness:
     def __init__(self, callback: Optional[Callable] = None):
         self.router  = IntentRouter()
         self.gate    = DecisionGate()
+        self.sufficiency = SourceSufficiencyGate()
         self.callback = callback or print
         self.passed  = 0
         self.failed  = 0
@@ -287,6 +289,20 @@ class EvalHarness:
                 context_complete=case.has_sources,
             )
             actual_mode = gate_result.mode.value
+
+            # No sources → apply the same sufficiency override the real
+            # pipeline applies (core/pipeline.py), so the case tests what
+            # the user would actually get
+            if not case.has_sources:
+                none = SufficiencyResult(
+                    verdict=Sufficiency.NONE, reason="", chunk_count=0,
+                    avg_conf=0.0, diversity=0, has_peer=False, peer_blocked=False,
+                )
+                override = self.sufficiency.gate_mode_override(
+                    none, actual_mode, intent=plan.intent
+                )
+                if override:
+                    actual_mode = override
 
             # Check assertions
             intent_ok = (

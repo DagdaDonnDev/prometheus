@@ -18,7 +18,11 @@ class ExpandingTextEdit(QTextEdit):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setPlaceholderText("Ask anything... (Enter to send, Shift+Enter for new line)")
+        from core.platform_info import PHONE_LAYOUT
+        self.setPlaceholderText(
+            "Ask anything…" if PHONE_LAYOUT
+            else "Ask anything... (Enter to send, Shift+Enter for new line)"
+        )
         self.setMinimumHeight(44)
         self.setMaximumHeight(150)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)

@@ -1,870 +1,346 @@
 """
-build_apk.py
-============
-Builds Prometheus into an Android APK using Buildozer + Kivy.
+Prometheus — Android APK builder (Qt for Python / shiboken6)
+=============================================================
+Builds the SAME app as desktop — main.py, core/ and ui/ — into an APK with
+pyside6-android-deploy. There is no separate Android UI to keep in step:
+a change on desktop is a change on Android. The narrow-screen layout
+switches on automatically (core/platform_info.py → PHONE_LAYOUT).
 
-The core logic (core/*.py) is shared between desktop and Android.
-Only the UI layer differs — Android uses Kivy instead of PySide6.
+Needs (Linux or macOS; on Windows use WSL2 or the GitHub build):
+  - PySide6 + shiboken6 Android wheels for your target, e.g.
+      PySide6-6.x.y-6.x.y-cp311-cp311-android_aarch64.whl
+      shiboken6-6.x.y-6.x.y-cp311-cp311-android_aarch64.whl
+    Same version as the PySide6 installed on this computer.
+  - JDK 17
+  - Android NDK/SDK — downloaded by the deploy tool if not given
 
 Usage:
-    python build_apk.py --setup      # install dependencies, init buildozer
-    python build_apk.py --debug      # build debug APK (faster, for testing)
-    python build_apk.py --release    # build release APK (for distribution)
-    python build_apk.py --install    # build and install to connected device
+  python build_apk.py --setup                      # install the deploy tool's needs
+  python build_apk.py --debug                      # build a debug APK (finds wheels)
+  python build_apk.py --debug --wheels ~/qtwheels  # say where the wheels are
+  python build_apk.py --install                    # push the newest APK via ADB
+  python build_apk.py --github                     # write a GitHub Actions workflow
+  python build_apk.py --debug --dry-run            # show what would run
 
-Requirements:
-    - Linux or macOS (Buildozer does not support Windows directly)
-    - Windows users: use WSL2 (Ubuntu) or a Linux VM
-    - Java JDK 17
-    - Android SDK/NDK (installed automatically by Buildozer)
-
-Output:
-    bin/Prometheus-1.0.0-debug.apk
-    bin/Prometheus-1.0.0-release.apk
-
-Android-specific notes:
-    - Ollama cannot run on Android (ARM, different architecture)
-    - Android version uses a remote Ollama server OR a bundled llama.cpp
-    - llama.cpp Android build is included via python-for-android recipe
-    - Recommended: run Ollama on a laptop/Pi on same WiFi, Android connects to it
-    - Or: use llama-cpp-python which supports Android ARM via python-for-android
-
-LLM strategy on Android:
-    1. Local network Ollama (preferred) - user sets IP in settings
-    2. llama-cpp-python (bundled) - runs Llama 3.2 3B directly on device
-    3. No LLM (offline knowledge search only) - always works
+On the phone: run Ollama on a computer on the same WiFi, then set
+⚙ Settings → Ollama URL to e.g. http://192.168.1.100:11434
 """
 
+import argparse
+import logging
 import os
-import sys
-import subprocess
-import shutil
 import platform
-from pathlib import Path
-
-
-APP_NAME      = "Prometheus"
-APP_VERSION   = "1.0.0"
-PACKAGE_NAME  = "org.prometheus.survival"
-ANDROID_DIR   = Path("android")
-
-
-# ── Buildozer spec ─────────────────────────────────────────────────────────
-
-BUILDOZER_SPEC = """[app]
-title = Prometheus
-package.name = prometheus
-package.domain = org.survival
-source.dir = .
-source.include_exts = py,png,jpg,kv,atlas,md,txt,json,qss,onnx
-source.include_patterns = assets/*,core/*,knowledge_base/*,voices/*,memory/*
-
-version = 1.0.0
-
-requirements = python3,\
-    kivy==2.3.0,\
-    kivymd,\
-    requests,\
-    numpy,\
-    pillow,\
-    certifi,\
-    charset-normalizer,\
-    idna,\
-    urllib3
-
-# For on-device LLM (optional - large download):
-# requirements = ...,llama-cpp-python
-
-orientation = portrait
-fullscreen = 0
-
-android.permissions = INTERNET,\
-    RECORD_AUDIO,\
-    WRITE_EXTERNAL_STORAGE,\
-    READ_EXTERNAL_STORAGE,\
-    WAKE_LOCK,\
-    FOREGROUND_SERVICE
-
-android.api = 33
-android.minapi = 26
-android.ndk = 25b
-android.sdk = 33
-android.accept_sdk_license = True
-
-android.archs = arm64-v8a, armeabi-v7a
-
-android.allow_backup = True
-android.logcat_filters = *:S python:D
-
-[buildozer]
-log_level = 2
-warn_on_root = 1
-"""
-
-
-# ── Android main.py (Kivy entry point) ────────────────────────────────────
-
-ANDROID_MAIN = '''"""
-Android entry point for Prometheus.
-Uses Kivy UI instead of PySide6.
-All core logic (core/*.py) is shared with desktop version.
-"""
-
-import os
+import re
+import subprocess
 import sys
 from pathlib import Path
 
-# Android storage paths
-from kivy.utils import platform as kivy_platform
-
-if kivy_platform == "android":
-    from android.storage import app_storage_path, primary_external_storage_path
-    from android.permissions import request_permissions, Permission
-    request_permissions([
-        Permission.RECORD_AUDIO,
-        Permission.WRITE_EXTERNAL_STORAGE,
-        Permission.READ_EXTERNAL_STORAGE,
-    ])
-    APP_DIR = Path(app_storage_path())
-else:
-    APP_DIR = Path(".")
-
-# Redirect memory and knowledge paths for Android
-os.environ["PROMETHEUS_DATA_DIR"] = str(APP_DIR)
-sys.path.insert(0, str(Path(__file__).parent))
-
-from kivy.app import App
-from kivy.core.window import Window
-from kivy.metrics import dp
-from kivymd.app import MDApp
-from kivymd.uix.screen import MDScreen
-from kivymd.uix.tab import MDTabs, MDTabsBase
-from kivymd.uix.boxlayout import MDBoxLayout
-from kivymd.uix.scrollview import MDScrollView
-from kivymd.uix.label import MDLabel
-from kivymd.uix.textfield import MDTextField
-from kivymd.uix.button import MDIconButton, MDFlatButton, MDRaisedButton
-from kivymd.uix.card import MDCard
-from kivymd.uix.toolbar import MDTopAppBar
-from kivymd.uix.navigationdrawer import MDNavigationDrawer, MDNavigationLayout
-from kivymd.uix.list import MDList, OneLineListItem, TwoLineListItem
-from kivymd.uix.dialog import MDDialog
-from kivymd.uix.snackbar import Snackbar
-from kivy.clock import Clock
-from kivy.properties import StringProperty, BooleanProperty, ListProperty
-
-# Core systems (shared with desktop)
-from core.config import Config
-from core.memory import Memory
-from core.tabs import TabManager
-from core.rag import KnowledgeBase
-from core.llm import LLMEngine
-from core.confidence import ConfidenceScorer
-from core.context_manager import ContextManager
-
-import threading
-
-
-# ── Tab definitions for Android UI ────────────────────────────────────────
-
-TAB_ICONS = {
-    "survival":   "fire",
-    "medical":    "medical-bag",
-    "electronics": "flash",
-    "navigation": "map-marker",
-    "farming":    "sprout",
-    "build":      "wrench",
-    "chemistry":  "flask",
-    "prometheus": "chat",
-}
-
-
-# ── Message bubble widgets ─────────────────────────────────────────────────
-
-class UserMessage(MDCard):
-    text = StringProperty("")
-
-    def __init__(self, text, **kwargs):
-        super().__init__(**kwargs)
-        self.text = text
-        self.orientation = "vertical"
-        self.padding = dp(12)
-        self.spacing = dp(4)
-        self.size_hint_y = None
-        self.radius = [dp(16), dp(16), dp(4), dp(16)]
-        self.md_bg_color = (0.16, 0.24, 0.16, 1)
-        self.size_hint_x = 0.8
-        self.pos_hint = {"right": 0.98}
-
-        label = MDLabel(
-            text=text,
-            theme_text_color="Custom",
-            text_color=(0.83, 0.93, 0.83, 1),
-            adaptive_height=True,
-            font_size=dp(14),
-        )
-        self.add_widget(label)
-        self.bind(minimum_height=self.setter("height"))
-
-
-class AssistantMessage(MDCard):
-    text = StringProperty("")
-
-    def __init__(self, text="", **kwargs):
-        super().__init__(**kwargs)
-        self.text = text
-        self.orientation = "vertical"
-        self.padding = dp(12)
-        self.spacing = dp(4)
-        self.size_hint_y = None
-        self.radius = [dp(16), dp(16), dp(16), dp(4)]
-        self.md_bg_color = (0.12, 0.12, 0.12, 1)
-        self.size_hint_x = 0.85
-        self.pos_hint = {"x": 0.02}
-
-        self._label = MDLabel(
-            text=text or "...",
-            theme_text_color="Custom",
-            text_color=(0.91, 0.91, 0.91, 1),
-            adaptive_height=True,
-            font_size=dp(14),
-        )
-        self.add_widget(self._label)
-        self.bind(minimum_height=self.setter("height"))
-
-    def append_text(self, token):
-        current = self._label.text
-        if current == "...":
-            self._label.text = token
-        else:
-            self._label.text = current + token
-
-
-# ── Chat screen ────────────────────────────────────────────────────────────
-
-class ChatScreen(MDScreen):
-    def __init__(self, tab_id, tab_manager, llm, knowledge,
-                 memory, context_mgr, config, **kwargs):
-        super().__init__(**kwargs)
-        self.tab_id = tab_id
-        self.tab_manager = tab_manager
-        self.llm = llm
-        self.knowledge = knowledge
-        self.memory = memory
-        self.context_mgr = context_mgr
-        self.config = config
-        self._generating = False
-        self._current_bubble = None
-        self._build_ui()
-        self._load_history()
-
-    def _build_ui(self):
-        layout = MDBoxLayout(orientation="vertical")
-
-        # Messages scroll area
-        scroll = MDScrollView()
-        self._messages = MDBoxLayout(
-            orientation="vertical",
-            spacing=dp(8),
-            padding=[dp(8), dp(8), dp(8), dp(8)],
-            size_hint_y=None,
-            adaptive_height=True,
-        )
-        self._messages.bind(minimum_height=self._messages.setter("height"))
-        scroll.add_widget(self._messages)
-        layout.add_widget(scroll)
-        self._scroll = scroll
-
-        # Input area
-        input_row = MDBoxLayout(
-            orientation="horizontal",
-            size_hint_y=None,
-            height=dp(60),
-            padding=[dp(8), dp(8), dp(8), dp(8)],
-            spacing=dp(8),
-            md_bg_color=(0.08, 0.08, 0.08, 1),
-        )
-
-        self._input = MDTextField(
-            hint_text="Ask anything...",
-            mode="rectangle",
-            size_hint_x=0.85,
-            multiline=False,
-        )
-        self._input.bind(on_text_validate=self._on_submit)
-
-        send_btn = MDIconButton(
-            icon="send",
-            theme_icon_color="Custom",
-            icon_color=(0.94, 0.65, 0, 1),
-            on_release=self._on_send_press,
-        )
-
-        input_row.add_widget(self._input)
-        input_row.add_widget(send_btn)
-        layout.add_widget(input_row)
-
-        self.add_widget(layout)
-
-    def _load_history(self):
-        tab = self.tab_manager.get_tab(self.tab_id)
-        if not tab:
-            return
-        for msg in tab.history[-20:]:  # Last 20 messages
-            if msg["role"] == "user":
-                self._messages.add_widget(UserMessage(text=msg["content"]))
-            else:
-                self._messages.add_widget(AssistantMessage(text=msg["content"]))
-        Clock.schedule_once(lambda dt: self._scroll_bottom(), 0.1)
-
-    def _on_submit(self, instance):
-        self._send(instance.text)
-
-    def _on_send_press(self, instance):
-        self._send(self._input.text)
-
-    def _send(self, text):
-        text = text.strip()
-        if not text or self._generating:
-            return
-
-        self._input.text = ""
-        tab = self.tab_manager.get_tab(self.tab_id)
-        if not tab:
-            return
-
-        # Add user message
-        tab.add_message("user", text)
-        self._messages.add_widget(UserMessage(text=text))
-        self.tab_manager.save()
-
-        # Generate response in background thread
-        self._generating = True
-        self._current_bubble = AssistantMessage()
-        self._messages.add_widget(self._current_bubble)
-        Clock.schedule_once(lambda dt: self._scroll_bottom(), 0.1)
-
-        thread = threading.Thread(
-            target=self._generate,
-            args=(tab, text),
-            daemon=True
-        )
-        thread.start()
-
-    def _generate(self, tab, user_input):
-        try:
-            knowledge_context, confidence_note = self.knowledge.search(
-                user_input,
-                domains=tab.domains,
-                n_results=self.config.rag_results
-            )
-            user_context = self.memory.get_context_string()
-            system_prompt = self.llm.build_system_prompt(
-                tab.system_prompt,
-                user_context,
-                knowledge_context,
-                confidence_note
-            )
-            messages = self.context_mgr.prepare_messages(tab)
-
-            full_response = []
-
-            def on_token(token):
-                full_response.append(token)
-                Clock.schedule_once(
-                    lambda dt: self._current_bubble.append_text(token), 0
-                )
-                Clock.schedule_once(lambda dt: self._scroll_bottom(), 0)
-
-            def on_done(full):
-                tab.add_message("assistant", full)
-                self.tab_manager.save()
-                self._generating = False
-                self._current_bubble = None
-
-            def on_error(err):
-                Clock.schedule_once(
-                    lambda dt: self._show_error(err), 0
-                )
-                self._generating = False
-
-            self.llm.stream(messages, system_prompt, on_token, on_done, on_error)
-
-        except Exception as e:
-            Clock.schedule_once(lambda dt: self._show_error(str(e)), 0)
-            self._generating = False
-
-    def _show_error(self, msg):
-        Snackbar(text=f"Error: {msg}", duration=4).open()
-
-    def _scroll_bottom(self):
-        self._scroll.scroll_y = 0
-
-
-# ── Main Prometheus Android App ────────────────────────────────────────────
-
-class PrometheusApp(MDApp):
-
-    def build(self):
-        self.theme_cls.theme_style = "Dark"
-        self.theme_cls.primary_palette = "Amber"
-        self.theme_cls.primary_hue = "700"
-        self.title = "Prometheus"
-
-        # Initialize core systems
-        self.config = Config()
-        self.memory = Memory()
-        self.tab_manager = TabManager()
-        self.knowledge = KnowledgeBase()
-        self.llm = LLMEngine(self.config)
-        self.context_mgr = ContextManager(self.llm)
-
-        # Check if Ollama is on local network
-        self._check_llm_available()
-
-        # Initialize knowledge base in background
-        threading.Thread(
-            target=self.knowledge.initialize_vector_db,
-            daemon=True
-        ).start()
-
-        return self._build_main_layout()
-
-    def _build_main_layout(self):
-        layout = MDBoxLayout(orientation="vertical")
-
-        # Top bar
-        toolbar = MDTopAppBar(
-            title="⚡ Prometheus",
-            right_action_items=[
-                ["cog", lambda x: self._show_settings()],
-                ["information", lambda x: self._show_situation()],
-            ],
-            md_bg_color=(0.07, 0.07, 0.07, 1),
-        )
-        layout.add_widget(toolbar)
-
-        # Tab bar
-        self._tabs = MDTabs(
-            tab_indicator_anim=True,
-            tab_hint_x=False,
-        )
-        self._chat_screens = {}
-
-        for tab in self.tab_manager.tabs:
-            icon = TAB_ICONS.get(tab.id, "star")
-            tab_item = self._make_tab(tab.id, tab.name, icon)
-            self._tabs.add_widget(tab_item)
-
-        self._tabs.bind(on_tab_switch=self._on_tab_switch)
-        layout.add_widget(self._tabs)
-
-        return layout
-
-    def _make_tab(self, tab_id, name, icon):
-        from kivymd.uix.tab import MDTabsBase
-        from kivymd.uix.floatlayout import MDFloatLayout
-
-        class Tab(MDFloatLayout, MDTabsBase):
-            pass
-
-        tab = Tab(title=name, icon=icon)
-
-        # Create chat screen for this tab
-        screen = ChatScreen(
-            tab_id=tab_id,
-            tab_manager=self.tab_manager,
-            llm=self.llm,
-            knowledge=self.knowledge,
-            memory=self.memory,
-            context_mgr=self.context_mgr,
-            config=self.config,
-        )
-        self._chat_screens[tab_id] = screen
-        tab.add_widget(screen)
-
-        return tab
-
-    def _on_tab_switch(self, instance_tabs, instance_tab, instance_tab_label, tab_text):
-        self.tab_manager.active_tab_id = instance_tab.tab_id
-        self.tab_manager.save()
-
-    def _check_llm_available(self):
-        if not self.llm.is_available():
-            Clock.schedule_once(self._show_llm_setup_dialog, 1)
-
-    def _show_llm_setup_dialog(self, dt):
-        dialog = MDDialog(
-            title="LLM Setup Required",
-            text=(
-                "Prometheus needs Ollama to generate responses.\\n\\n"
-                "Options:\\n"
-                "1. Run Ollama on your laptop/PC on the same WiFi\\n"
-                "   Set the IP in Settings → Model → Ollama URL\\n"
-                "   Example: http://192.168.1.100:11434\\n\\n"
-                "2. Knowledge search still works without LLM."
-            ),
-            buttons=[
-                MDFlatButton(
-                    text="OK",
-                    on_release=lambda x: dialog.dismiss()
-                ),
-                MDRaisedButton(
-                    text="Settings",
-                    on_release=lambda x: (dialog.dismiss(), self._show_settings())
-                ),
-            ]
-        )
-        dialog.open()
-
-    def _show_settings(self):
-        from kivymd.uix.textfield import MDTextField
-
-        url_field = MDTextField(
-            text=self.config.ollama_url,
-            hint_text="Ollama URL (e.g. http://192.168.1.100:11434)",
-            mode="rectangle",
-        )
-
-        def save(instance):
-            self.config.ollama_url = url_field.text.strip()
-            self.llm.base_url = self.config.ollama_url
-            self.config.save()
-            dialog.dismiss()
-            Snackbar(text="Settings saved").open()
-
-        dialog = MDDialog(
-            title="Settings",
-            type="custom",
-            content_cls=url_field,
-            buttons=[
-                MDFlatButton(text="Cancel", on_release=lambda x: dialog.dismiss()),
-                MDRaisedButton(text="Save", on_release=save),
-            ]
-        )
-        dialog.open()
-
-    def _show_situation(self):
-        u = self.memory.data["user"]
-        inv = self.memory.data["inventory"]
-
-        info = (
-            f"Name: {u.get('name') or 'Unknown'}\\n"
-            f"Day: {u.get('day_count', 1)}\\n"
-            f"Location: {u.get('location_estimate') or 'Unknown'}\\n"
-            f"Food: {inv.get('food_days') or '?'} days\\n"
-            f"Water: {inv.get('water_days') or '?'} days\\n"
-            f"Shelter: {inv.get('shelter_status') or 'Unknown'}"
-        )
-
-        dialog = MDDialog(
-            title="Your Situation",
-            text=info,
-            buttons=[
-                MDFlatButton(text="Close", on_release=lambda x: dialog.dismiss()),
-            ]
-        )
-        dialog.open()
-
-
-if __name__ == "__main__":
-    PrometheusApp().run()
-'''
-
-# ── Build functions ────────────────────────────────────────────────────────
+APP_NAME = "Prometheus"
+ROOT     = Path(__file__).resolve().parent
+
+# Where to look for the Android wheels if --wheels isn't given
+WHEEL_SEARCH_DIRS = [
+    os.environ.get("PROMETHEUS_WHEELS", ""),
+    ROOT / "wheels",
+    Path.home() / "wheels",
+    Path.home() / "qtwheels",
+    Path.home() / "Downloads",
+    Path.home() / ".pyside6_android_deploy",
+]
+
+# ── Additions to the buildozer config the deploy tool generates ────────────
+# The tool only packs .py/.qml/.js/images and only PySide6 + shiboken6.
+# Prometheus also needs its knowledge files, stylesheet and pure-Python deps.
+
+EXTRA_INCLUDE_EXTS = ["md", "txt", "json", "qss"]
+
+EXTRA_REQUIREMENTS = [
+    "requests", "urllib3", "idna", "certifi", "charset-normalizer",   # Ollama client
+    "sqlite3",                                                        # offline map search
+]
+
+EXTRA_PERMISSIONS = [
+    "android.permission.INTERNET",                   # Ollama on the local network
+    "android.permission.ACCESS_NETWORK_STATE",
+    "android.permission.ACCESS_WIFI_STATE",
+    "android.permission.CHANGE_WIFI_MULTICAST_STATE",  # peer discovery (UDP broadcast)
+]
+
+# Never packed: personal data, build output, dev-only folders
+EXCLUDE_DIRS = [
+    "memory", "voices", "tests", "bin", "build", "dist", "wheels",
+    ".github", ".buildozer", "deployment", "prometheus_setup", "__pycache__",
+]
+
+
+# ── Step 1: checks ─────────────────────────────────────────────────────────
 
 def check_platform():
-    """Buildozer requires Linux or macOS."""
     if platform.system() == "Windows":
-        print("""
-⚠️  Buildozer does not run natively on Windows.
-
-Options:
-  1. Use WSL2 (Windows Subsystem for Linux):
-     wsl --install
-     Then run this script inside WSL2
-
-  2. Use a Linux virtual machine (VirtualBox, VMware)
-
-  3. Use GitHub Actions (build in the cloud — free):
-     See: https://github.com/marketplace/actions/build-apk-via-buildozer
-
-The build_apk.py script will generate all necessary files.
-Copy them to a Linux environment and run: buildozer android debug
-""")
-        return False
-    return True
-
-
-def install_dependencies():
-    """Install Buildozer and Android build dependencies."""
-    print("Installing Buildozer...")
-
-    # Install buildozer
-    subprocess.run([
-        sys.executable, "-m", "pip", "install",
-        "buildozer", "kivy", "kivymd", "--upgrade"
-    ], check=True)
-
-    # Linux-specific dependencies
-    if platform.system() == "Linux":
-        print("\nInstalling Linux build dependencies...")
-        packages = [
-            "git", "zip", "unzip", "openjdk-17-jdk",
-            "autoconf", "libtool", "pkg-config",
-            "zlib1g-dev", "libncurses5-dev", "libncursesw5-dev",
-            "cmake", "libffi-dev", "libssl-dev",
-            "python3-pip", "python3-setuptools",
-        ]
-        subprocess.run(
-            ["sudo", "apt-get", "install", "-y"] + packages,
-            capture_output=False
-        )
-
-    print("✓ Dependencies installed")
-
-
-def setup_android_project():
-    """Create Android project structure."""
-    ANDROID_DIR.mkdir(exist_ok=True)
-
-    # Write buildozer.spec
-    spec_path = Path("buildozer.spec")
-    spec_path.write_text(BUILDOZER_SPEC)
-    print(f"✓ Created buildozer.spec")
-
-    # Write Android main.py
-    android_main = Path("main_android.py")
-    android_main.write_text(ANDROID_MAIN)
-    print(f"✓ Created main_android.py")
-
-    # Create Android-specific config adapter
-    adapter = Path("android_config.py")
-    adapter.write_text('''"""
-Android path adapter.
-Redirects file paths to Android storage locations.
-Imported automatically on Android by main_android.py.
-"""
-import os
-from pathlib import Path
-
-# On Android, use app-private storage
-if os.environ.get("PROMETHEUS_DATA_DIR"):
-    DATA_DIR = Path(os.environ["PROMETHEUS_DATA_DIR"])
-else:
-    DATA_DIR = Path(".")
-
-# Override default paths
-MEMORY_PATH_OVERRIDE    = str(DATA_DIR / "memory")
-KNOWLEDGE_PATH_OVERRIDE = str(DATA_DIR / "knowledge_base")
-VOICES_PATH_OVERRIDE    = str(DATA_DIR / "voices")
-''')
-    print(f"✓ Created android_config.py")
-
-    # Create presplash and icon placeholders
-    assets = Path("assets")
-    assets.mkdir(exist_ok=True)
-    (assets / "presplash.png").touch()   # Replace with actual splash screen
-    (assets / "icon.png").touch()        # Replace with actual icon
-
-    print(f"\n✓ Android project structure ready")
-    print(f"\nNext: run 'python build_apk.py --debug' to build")
-
-
-def build_apk(release: bool = False):
-    """Run Buildozer to build the APK."""
-    if not Path("buildozer.spec").exists():
-        print("buildozer.spec not found. Run: python build_apk.py --setup")
+        print("Android builds need Linux or macOS.\n"
+              "  Option 1: run this inside WSL2 (Ubuntu)\n"
+              "  Option 2: python build_apk.py --github   (builds on GitHub, free)")
         sys.exit(1)
 
-    # Swap main.py temporarily for Android version
-    main_backup = Path("main_desktop.py")
-    main_py = Path("main.py")
 
-    if Path("main_android.py").exists():
-        print("Swapping to Android main...")
-        if main_py.exists():
-            shutil.copy2(main_py, main_backup)
-        shutil.copy2("main_android.py", main_py)
-
+def deploy_scripts_dir() -> Path:
+    """Folder that holds pyside6-android-deploy's code inside the PySide6 install."""
     try:
-        mode = "release" if release else "debug"
-        print(f"\nBuilding {mode} APK with Buildozer...")
-        print("First build downloads Android SDK/NDK — takes 20-40 minutes.")
-        print("Subsequent builds: 3-5 minutes.\n")
+        import PySide6
+    except ImportError:
+        print("PySide6 is not installed on this computer: pip install PySide6")
+        sys.exit(1)
+    scripts = Path(PySide6.__file__).parent / "scripts"
+    if not (scripts / "android_deploy.py").exists():
+        print(f"pyside6-android-deploy not found in {scripts}. Update PySide6.")
+        sys.exit(1)
+    return scripts
 
-        result = subprocess.run(
-            ["buildozer", "-v", "android", mode],
-            capture_output=False
-        )
 
-        if result.returncode == 0:
-            # Find the APK
-            apks = list(Path("bin").glob("*.apk")) if Path("bin").exists() else []
-            if apks:
-                apk = apks[-1]
-                size = apk.stat().st_size / 1024 / 1024
-                print(f"""
-{'='*50}
-✅ APK BUILD SUCCESSFUL
-{'='*50}
+def host_pyside_version() -> str:
+    import PySide6
+    return PySide6.__version__
 
-APK: {apk}
-Size: {size:.0f} MB
 
-Install on device:
-  adb install {apk}
+def check_jdk():
+    try:
+        out = subprocess.run(["java", "-version"], capture_output=True, text=True)
+        text = out.stderr + out.stdout
+        m = re.search(r'version "(\d+)', text)
+        if m and int(m.group(1)) >= 17:
+            return
+        print(f"JDK 17+ is needed. Found: {text.strip().splitlines()[0] if text.strip() else 'none'}")
+    except FileNotFoundError:
+        print("Java not found. Install JDK 17 (e.g. sudo apt install openjdk-17-jdk).")
+    sys.exit(1)
 
-Or copy to device and install manually.
 
-Note: Enable 'Install from unknown sources' on device.
-""")
-        else:
-            print("\n✗ Build failed. Check output above.")
+# ── Step 2: find the wheels ────────────────────────────────────────────────
 
-    finally:
-        # Restore desktop main.py
-        if main_backup.exists():
-            shutil.copy2(main_backup, main_py)
-            main_backup.unlink()
-            print("Restored desktop main.py")
+def wheel_version(path: Path) -> str:
+    m = re.match(r"(?:PySide6|shiboken6)-([\d.]+)", path.name)
+    return m.group(1) if m else ""
 
+
+def find_wheels(search_dir, arch: str):
+    """Return (pyside_wheel, shiboken_wheel) for the arch, newest version first."""
+    dirs = [Path(search_dir).expanduser()] if search_dir else [Path(d).expanduser() for d in WHEEL_SEARCH_DIRS if d]
+    pyside, shiboken = [], []
+    for d in dirs:
+        if d.is_dir():
+            pyside   += d.rglob(f"PySide6-*android*{arch}*.whl")
+            shiboken += d.rglob(f"shiboken6-*android*{arch}*.whl")
+
+    def newest(found):
+        return max(found, key=lambda p: [int(x) for x in wheel_version(p).split(".") if x.isdigit()],
+                   default=None)
+
+    return newest(pyside), newest(shiboken)
+
+
+# ── Step 3: build ──────────────────────────────────────────────────────────
+
+def _patch_buildozer_config(scripts: Path):
+    """
+    The deploy tool deletes and regenerates buildozer.spec on every run, so the
+    extras above are added by wrapping its config class instead of editing a file.
+    """
+    sys.path.insert(0, str(scripts))
+    from deploy_lib.android import buildozer as bz
+
+    Base = bz.BuildozerConfig
+
+    class PrometheusBuildozerConfig(Base):
+        def __init__(self, spec_file, pysidedeploy_config):
+            super().__init__(spec_file, pysidedeploy_config)
+
+            def merge(key, extra, sep=","):
+                current = [x.strip() for x in (self.get_value("app", key, ignore_fail=True) or "").split(sep) if x.strip()]
+                for item in extra:
+                    if item not in current:
+                        current.append(item)
+                self.set_value("app", key, sep.join(current), raise_warning=False)
+
+            merge("source.include_exts", EXTRA_INCLUDE_EXTS)
+            merge("requirements", EXTRA_REQUIREMENTS)
+            merge("android.permissions", EXTRA_PERMISSIONS, sep=", ")
+            merge("source.exclude_dirs", EXCLUDE_DIRS)
+            self.set_value("app", "title", APP_NAME, raise_warning=False)
+            self.set_value("app", "orientation", "portrait", raise_warning=False)
+            self.update_config()
+
+    bz.BuildozerConfig = PrometheusBuildozerConfig
+
+
+def build_apk(args):
+    check_platform()
+    scripts = deploy_scripts_dir()
+    if not args.dry_run:
+        check_jdk()
+
+    # Find wheels
+    pyside = Path(args.wheel_pyside) if args.wheel_pyside else None
+    shiboken = Path(args.wheel_shiboken) if args.wheel_shiboken else None
+    if not (pyside and shiboken):
+        found_p, found_s = find_wheels(args.wheels, args.arch)
+        pyside, shiboken = pyside or found_p, shiboken or found_s
+    if not (pyside and shiboken and pyside.exists() and shiboken.exists()):
+        print(f"Couldn't find PySide6 and shiboken6 Android wheels for {args.arch}.\n"
+              "Give the folder with --wheels DIR, or each file with\n"
+              "--wheel-pyside FILE --wheel-shiboken FILE.")
+        sys.exit(1)
+    print(f"PySide6 wheel:   {pyside}")
+    print(f"shiboken6 wheel: {shiboken}")
+
+    # The deploy tool must be the same version as the wheels
+    host = host_pyside_version()
+    if wheel_version(pyside) and not host.startswith(wheel_version(pyside)):
+        print(f"\n⚠ Wheels are {wheel_version(pyside)} but this computer has PySide6 {host}.\n"
+              f"  Install the matching version first:  pip install PySide6=={wheel_version(pyside)}\n")
+        if not args.force:
+            sys.exit(1)
+
+    # Run the deploy tool in-process, from the project root (it needs main.py there)
+    _patch_buildozer_config(scripts)
+    from android_deploy import main as deploy_main
+
+    os.chdir(ROOT)
+    deploy_main(
+        name=APP_NAME,
+        pyside_wheel=pyside.resolve(),
+        shiboken_wheel=shiboken.resolve(),
+        ndk_path=Path(args.ndk).expanduser().resolve() if args.ndk else None,
+        sdk_path=Path(args.sdk).expanduser().resolve() if args.sdk else None,
+        config_file=None,
+        init=False,
+        loglevel=logging.INFO if args.verbose else logging.WARNING,
+        dry_run=args.dry_run,
+        keep_deployment_files=args.keep,
+        force=True,
+        extra_ignore_dirs=",".join(EXCLUDE_DIRS),
+        extra_modules_grouped=None,
+        no_install=args.no_install,
+    )
+
+    apks = sorted(ROOT.glob("*.apk"), key=lambda p: p.stat().st_mtime)
+    if apks:
+        apk = apks[-1]
+        print(f"\n✅ APK built: {apk}  ({apk.stat().st_size / 1024 / 1024:.0f} MB)\n"
+              f"Install: python build_apk.py --install   (or: adb install {apk.name})")
+    elif not args.dry_run:
+        print("\n✗ No APK found. Re-run with --verbose to see the build output.")
+
+
+# ── Install and CI ─────────────────────────────────────────────────────────
 
 def install_to_device():
-    """Install APK to connected Android device via ADB."""
-    apks = list(Path("bin").glob("*.apk")) if Path("bin").exists() else []
+    apks = sorted(ROOT.glob("*.apk"), key=lambda p: p.stat().st_mtime)
     if not apks:
-        print("No APK found. Build first with: python build_apk.py --debug")
-        return
-
-    apk = sorted(apks)[-1]
-    print(f"Installing {apk} to connected device...")
-
-    result = subprocess.run(["adb", "install", "-r", str(apk)])
-    if result.returncode == 0:
-        print("✓ Installed successfully")
-        print("Launch Prometheus on your device")
-    else:
-        print("✗ Install failed. Is the device connected with USB debugging enabled?")
+        print("No APK found. Build first: python build_apk.py --debug")
+        sys.exit(1)
+    print(f"Installing {apks[-1].name} …")
+    subprocess.run(["adb", "install", "-r", str(apks[-1])], check=False)
 
 
-def generate_github_actions():
-    """Generate GitHub Actions workflow for cloud APK building."""
-    workflow_dir = Path(".github/workflows")
-    workflow_dir.mkdir(parents=True, exist_ok=True)
+GITHUB_WORKFLOW = """name: Build Prometheus APK
 
-    workflow = """name: Build Prometheus APK
+# Builds the same PySide6 app as desktop for Android.
+# Set two repository variables (Settings → Secrets and variables → Actions → Variables):
+#   PYSIDE_ANDROID_WHEEL_URL    direct link to PySide6-…-android_aarch64.whl
+#   SHIBOKEN_ANDROID_WHEEL_URL  direct link to shiboken6-…-android_aarch64.whl
 
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:
 
 jobs:
   build-apk:
-    runs-on: ubuntu-22.04
-
+    runs-on: ubuntu-24.04
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
+    - uses: actions/setup-python@v5
       with:
         python-version: '3.11'
 
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y git zip unzip openjdk-17-jdk \\
-          autoconf libtool pkg-config zlib1g-dev \\
-          libncurses5-dev libncursesw5-dev cmake \\
-          libffi-dev libssl-dev python3-pip
-        pip install buildozer kivy kivymd cython
+    - uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '17'
 
-    - name: Setup Android project
-      run: python build_apk.py --setup
+    - name: Download Android wheels
+      run: |
+        mkdir -p wheels
+        curl -fL -o "wheels/$(basename "${{ vars.PYSIDE_ANDROID_WHEEL_URL }}")" "${{ vars.PYSIDE_ANDROID_WHEEL_URL }}"
+        curl -fL -o "wheels/$(basename "${{ vars.SHIBOKEN_ANDROID_WHEEL_URL }}")" "${{ vars.SHIBOKEN_ANDROID_WHEEL_URL }}"
+
+    - name: Install matching PySide6 and the deploy tool
+      run: |
+        VERSION=$(ls wheels/PySide6-*.whl | sed -E 's/.*PySide6-([0-9.]+)-.*/\\1/')
+        pip install "PySide6==$VERSION"
+        python build_apk.py --setup
 
     - name: Build APK
-      run: |
-        cp main_android.py main.py
-        buildozer android debug
+      run: python build_apk.py --debug --wheels wheels --verbose
 
-    - name: Upload APK
-      uses: actions/upload-artifact@v3
+    - uses: actions/upload-artifact@v4
       with:
         name: Prometheus-APK
-        path: bin/*.apk
+        path: "*.apk"
         retention-days: 30
 """
-    (workflow_dir / "build_apk.yml").write_text(workflow)
-    print(f"✓ Created .github/workflows/build_apk.yml")
-    print("  Push to GitHub → Actions tab → APK builds automatically")
+
+
+def generate_github_actions():
+    path = ROOT / ".github" / "workflows" / "build_apk.yml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(GITHUB_WORKFLOW)
+    print(f"✓ Created {path.relative_to(ROOT)}\n"
+          "  Set PYSIDE_ANDROID_WHEEL_URL and SHIBOKEN_ANDROID_WHEEL_URL as repository variables,\n"
+          "  push, then Actions → Build Prometheus APK → Run workflow.")
+
+
+def setup():
+    check_platform()
+    scripts = deploy_scripts_dir()
+    req = scripts / "requirements-android.txt"
+    print("Installing the deploy tool's requirements …")
+    subprocess.run([sys.executable, "-m", "pip", "install", "-r", str(req)], check=True)
+    print("✓ Ready. Next: python build_apk.py --debug --wheels <folder with the Android wheels>")
 
 
 # ── Main ───────────────────────────────────────────────────────────────────
 
 def main():
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Build Prometheus Android APK"
-    )
-    parser.add_argument("--setup",   action="store_true", help="Install dependencies and init project")
-    parser.add_argument("--debug",   action="store_true", help="Build debug APK")
-    parser.add_argument("--release", action="store_true", help="Build release APK")
-    parser.add_argument("--install", action="store_true", help="Install to connected device")
-    parser.add_argument("--github",  action="store_true", help="Generate GitHub Actions workflow")
-    args = parser.parse_args()
-
-    print(f"""
-{'='*50}
-⚡ PROMETHEUS APK BUILDER
-{'='*50}
-""")
-
-    if args.github:
-        generate_github_actions()
-        return
+    p = argparse.ArgumentParser(description="Build the Prometheus Android APK (PySide6)")
+    p.add_argument("--setup", action="store_true", help="install the deploy tool's requirements")
+    p.add_argument("--debug", action="store_true", help="build a debug APK")
+    p.add_argument("--install", action="store_true", help="install the newest APK via ADB")
+    p.add_argument("--github", action="store_true", help="write a GitHub Actions workflow")
+    p.add_argument("--wheels", help="folder containing the PySide6/shiboken6 Android wheels")
+    p.add_argument("--wheel-pyside", help="PySide6 Android wheel file")
+    p.add_argument("--wheel-shiboken", help="shiboken6 Android wheel file")
+    p.add_argument("--arch", default="aarch64", choices=["aarch64", "x86_64"],
+                   help="phone CPU (aarch64 for real phones, x86_64 for emulators)")
+    p.add_argument("--ndk", help="Android NDK path (r28c)")
+    p.add_argument("--sdk", help="Android SDK path")
+    p.add_argument("--dry-run", action="store_true", help="show the commands without running them")
+    p.add_argument("--keep", action="store_true", help="keep the generated build files")
+    p.add_argument("--no-install", action="store_true",
+                   help="don't let the deploy tool pip-install its own build tools")
+    p.add_argument("--force", action="store_true", help="build even if wheel and PySide6 versions differ")
+    p.add_argument("--verbose", action="store_true")
+    args = p.parse_args()
 
     if args.setup:
-        if not check_platform():
-            generate_github_actions()
-            print("\nGenerated GitHub Actions workflow as alternative.")
-            return
-        install_dependencies()
-        setup_android_project()
-        return
-
-    if args.debug or args.release:
-        if not check_platform():
-            sys.exit(1)
-        build_apk(release=args.release)
-        return
-
-    if args.install:
+        setup()
+    elif args.github:
+        generate_github_actions()
+    elif args.install:
         install_to_device()
-        return
-
-    # No args — show help
-    parser.print_help()
-    print(f"""
-Quick start:
-  1. python build_apk.py --setup      (first time only)
-  2. python build_apk.py --debug      (build APK)
-  3. python build_apk.py --install    (push to device)
-
-On Windows, generate a cloud build workflow instead:
-  python build_apk.py --github
-  Then push to GitHub and build runs automatically.
-
-Android LLM options:
-  - Recommended: Run Ollama on laptop on same WiFi
-    Set URL in app Settings → Ollama URL
-    e.g. http://192.168.1.100:11434
-
-  - Alternative: on-device llama.cpp (add to buildozer.spec requirements)
-    Slower but fully self-contained
-""")
+    elif args.debug:
+        build_apk(args)
+    else:
+        p.print_help()
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QColor
 
 from core.tracer import tracer, QueryTrace
+from core.platform_info import PHONE_LAYOUT
 
 
 # Colours for different modes
@@ -140,7 +141,8 @@ class DevPanel(QWidget):
         super().__init__(parent)
         self._graph = training_graph
         self.setObjectName("devPanel")
-        self.setMinimumSize(700, 500)
+        if not PHONE_LAYOUT:
+            self.setMinimumSize(700, 500)
         self._setup_ui()
 
         # Auto-refresh every 2 seconds — only when visible

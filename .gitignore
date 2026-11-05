@@ -1,5 +1,12 @@
+# Knowledge base: commit hand-written .md files, never downloaded books,
+# dumps, page images or the placeholder READMEs that ingest --init creates
 knowledge_base/*
-!knowledge_base/scientific_reference/
+!knowledge_base/*/
+knowledge_base/*/**
+!knowledge_base/*/
+!knowledge_base/*/*.md
+knowledge_base/*/README.md
+knowledge_base/wikipedia/
 memory/
 voices/
 prometheus_setup/
@@ -10,3 +17,13 @@ __pycache__/
 venv/
 .DS_Store
 Thumbs.db
+
+# Android build (pyside6-android-deploy)
+*.apk
+*.aab
+buildozer.spec
+pysidedeploy.spec
+.buildozer/
+deployment/
+wheels/
+.pyside6_android_deploy/

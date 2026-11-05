@@ -35,19 +35,16 @@ from ui.skill_tree import SkillTreeWidget
 from ui.quick_access import QuickAccessWidget
 from core.backup import BackupManager
 from ui.doc_context import DocumentContextWidget
-from core.decision_gate import DecisionGate, ResponseMode
 from core.map_engine import MapEngine
 from ui.map_view import MapWidget
 from core.p2p import P2PEngine
 from ui.messages_view import MessagesWidget
 from core.tabs import suggest_redirect
-from core.intent_router import IntentRouter
-from core.llm_bounds import build_bounds
-from core.sufficiency_gate import SourceSufficiencyGate, Sufficiency
-from core.contradiction import ContradictionDetector
-from core.memory_filter import MemoryRelevanceFilter
 from core.tracer import tracer
 from ui.dev_panel import DevPanel
+from core.pipeline import QueryPipeline
+from core.platform_info import PHONE_LAYOUT
+from ui.layout_helpers import size_dialog
 from core.training import TrainingGraph, DerivationEngine, TrainingSession, VERDICT_LABELS
 
 
@@ -65,12 +62,9 @@ class MainWindow(QMainWindow):
         self.stt = STTEngine(config)
         self.context_mgr   = ContextManager(self.llm)
         self.backup        = BackupManager()
-        self.gate          = DecisionGate()
-        self.router        = IntentRouter()
-        self.sufficiency   = SourceSufficiencyGate()
-        self.contradiction = ContradictionDetector()
-        self.mem_filter    = MemoryRelevanceFilter()
         self.map_engine    = MapEngine()
+        # Decision layers (router, gates, bounds) — shared with Android
+        self.pipeline      = QueryPipeline(self.memory, self.knowledge, self.llm, self.map_engine)
         self.p2p           = P2PEngine(self.memory)
         self.p2p.start()
 
@@ -103,8 +97,7 @@ class MainWindow(QMainWindow):
         """Show situation assessment mode."""
         dialog = QDialog(self)
         dialog.setWindowTitle("Situation Assessment")
-        dialog.setMinimumSize(700, 600)
-        dialog.resize(800, 700)
+        size_dialog(dialog, 700, 600, 800, 700)
 
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -125,8 +118,7 @@ class MainWindow(QMainWindow):
         """Show civilization skill tree."""
         dialog = QDialog(self)
         dialog.setWindowTitle("Civilization Rebuild Tracker")
-        dialog.setMinimumSize(700, 600)
-        dialog.resize(800, 700)
+        size_dialog(dialog, 700, 600, 800, 700)
 
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -161,8 +153,7 @@ class MainWindow(QMainWindow):
         """Show the world map in a dialog."""
         dialog = QDialog(self)
         dialog.setWindowTitle("World Map")
-        dialog.setMinimumSize(900, 600)
-        dialog.resize(1100, 700)
+        size_dialog(dialog, 900, 600, 1100, 700)
 
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -191,8 +182,7 @@ class MainWindow(QMainWindow):
         """Show personal document context manager."""
         dialog = QDialog(self)
         dialog.setWindowTitle("Personal Documents")
-        dialog.setMinimumSize(600, 550)
-        dialog.resize(650, 600)
+        size_dialog(dialog, 600, 550, 650, 600)
 
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -214,8 +204,9 @@ class MainWindow(QMainWindow):
 
     def _setup_ui(self):
         self.setWindowTitle("Prometheus")
-        self.setMinimumSize(800, 600)
-        self.resize(1100, 750)
+        if not PHONE_LAYOUT:
+            self.setMinimumSize(800, 600)
+            self.resize(1100, 750)
 
         # Central widget
         central = QWidget()
@@ -224,9 +215,20 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # Header
+        # Header — on a phone the buttons scroll sideways instead of overflowing
         header = self._build_header()
-        main_layout.addWidget(header)
+        if PHONE_LAYOUT:
+            header_scroll = QScrollArea()
+            header_scroll.setWidget(header)
+            header_scroll.setWidgetResizable(True)
+            header_scroll.setFixedHeight(header.height() + 6)
+            header_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            header_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            header_scroll.setFrameShape(QFrame.NoFrame)
+            header_scroll.setObjectName("tabScroll")
+            main_layout.addWidget(header_scroll)
+        else:
+            main_layout.addWidget(header)
 
         # Tab bar
         self.tab_bar = TabBar(self.tab_manager)
@@ -252,6 +254,13 @@ class MainWindow(QMainWindow):
         self.splitter.setSizes([800, 280])
         self.splitter.setStretchFactor(0, 1)
         self.splitter.setStretchFactor(1, 0)
+
+        # Phone: the situation panel takes the whole width when opened,
+        # so start with it closed
+        if PHONE_LAYOUT:
+            self.sidebar.setMaximumWidth(16777215)
+            self.sidebar.hide()
+            self._sidebar_btn.setText("▶ Info")
 
         main_layout.addWidget(self.splitter, 1)   # chat takes all spare height
 
@@ -282,7 +291,7 @@ class MainWindow(QMainWindow):
         layout = QHBoxLayout(header)
         layout.setContentsMargins(16, 0, 16, 0)
 
-        title = QLabel("⚡ PROMETHEUS")
+        title = QLabel("⚡" if PHONE_LAYOUT else "⚡ PROMETHEUS")
         title.setObjectName("headerTitle")
         font = title.font()
         font.setPointSize(16)
@@ -376,8 +385,7 @@ class MainWindow(QMainWindow):
         """Show observability dev panel."""
         dialog = QDialog(self)
         dialog.setWindowTitle("Dev Panel")
-        dialog.setMinimumSize(800, 500)
-        dialog.resize(900, 600)
+        size_dialog(dialog, 800, 500, 900, 600)
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(0, 0, 0, 0)
         panel = DevPanel(dialog, training_graph=self.training_graph)
@@ -387,9 +395,16 @@ class MainWindow(QMainWindow):
 
     def _check_ollama(self):
         if not self.llm.is_available():
-            self.status_bar.showMessage(
-                "⚠ Ollama not running. Start with: ollama serve", 0
-            )
+            if PHONE_LAYOUT:
+                # A phone can't run Ollama itself — it talks to a computer on the same WiFi
+                self.status_bar.showMessage(
+                    f"⚠ Can't reach Ollama at {self.config.ollama_url}. "
+                    "Set your computer's address in ⚙ Settings.", 0
+                )
+            else:
+                self.status_bar.showMessage(
+                    "⚠ Ollama not running. Start with: ollama serve", 0
+                )
         elif not self.llm.model_available():
             model = self.config.llm_model
             self.status_bar.showMessage(
@@ -412,9 +427,9 @@ class MainWindow(QMainWindow):
         self._init_worker.status_update.connect(
             lambda msg: self.status_bar.showMessage(msg, 0)
         )
-        self._init_worker.finished.connect(
-            lambda: self.status_bar.showMessage("✓ All systems ready", 3000)
-        )
+        # When loading finishes, re-check Ollama so its warning isn't
+        # replaced by "ready" while answers still can't be generated
+        self._init_worker.finished.connect(self._check_ollama)
         self._init_worker.start()
 
     def _load_tab(self, tab_id: str):
@@ -541,10 +556,7 @@ class MainWindow(QMainWindow):
             trace = tracer.start(user_input, tab.id)
 
             # ── Intent routing ─────────────────────────────────────────────
-            routing_plan = self.router.route(user_input, tab.id)
-            trace.intent           = routing_plan.intent.value
-            trace.is_strict        = routing_plan.is_strict
-            trace.allow_discussion = routing_plan.allow_discussion
+            routing_plan = self.pipeline.route(user_input, tab.id, trace)
 
             # ── Fork ───────────────────────────────────────────────────────
             if routing_plan.use_training_path:
@@ -570,11 +582,12 @@ class MainWindow(QMainWindow):
             lambda result: self._on_derivation_done(gen_id, tab, result)
         )
         self._training_worker.fallback_requested.connect(
-            lambda why: self._on_training_fallback(gen_id, tab, user_input, routing_plan, trace, why)
+            lambda result: self._on_training_fallback(gen_id, tab, user_input, routing_plan, trace, result)
         )
         self._training_worker.derivation_error.connect(
             lambda err: self._on_training_fallback(
-                gen_id, tab, user_input, routing_plan, trace, f"ERROR|{err}")
+                gen_id, tab, user_input, routing_plan, trace,
+                {"status": "ERROR", "reason": f"Couldn't work it out ({err})."})
         )
         self._training_worker.start()
 
@@ -613,17 +626,17 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage(msg, 6000)
 
     def _on_training_fallback(self, gen_id: int, tab: Tab, user_input: str,
-                              routing_plan, trace, why: str):
+                              routing_plan, trace, result: dict):
         """Derivation not possible — answer from the library instead."""
         if gen_id != self._generation_id:
             return
-        status, _, reason = why.partition("|")
         trace.path = "knowledge"
-        trace.training_status = f"fallback: {status}"
+        trace.training_status = f"fallback: {result.get('status', '')}"
         self.status_bar.showMessage("", 0)
-        if reason and status != "NO_MATCH":
+        note = self.pipeline.training_fallback_note(result)
+        if note:
             # Shown in the chat so it isn't lost when the status bar updates
-            self.chat_view.add_note(f"🧮 {reason} Answer below is from the library.")
+            self.chat_view.add_note(note)
         try:
             self._run_knowledge_path(tab, user_input, routing_plan, trace)
         except Exception as e:
@@ -633,148 +646,36 @@ class MainWindow(QMainWindow):
     # ── Knowledge Path ─────────────────────────────────────────────────────
 
     def _run_knowledge_path(self, tab: Tab, user_input: str, routing_plan, trace):
-        """The 11-step retrieval pipeline (steps 1–2 ran in _generate_response)."""
+        """
+        The Knowledge Path. Steps 2–10 run in core/pipeline.py (shared with
+        Android); this method only handles the UI and step 11 (streaming).
+        """
+        prepared = self.pipeline.prepare_knowledge(tab, user_input, routing_plan, trace)
 
-        # ── Step 2: Tiered RAG retrieval ───────────────────────────────────
-        knowledge_context, confidence_note = self.knowledge.search(
-            query=user_input,
-            routing_plan=routing_plan,
-        )
+        # Step 9: tell the user about mode and sources
+        if prepared.status_text:
+            self.status_bar.showMessage(prepared.status_text, 6000)
 
-        scores = self.knowledge.get_last_scores()
-        trace.retrieval.has_sources    = scores.get("has_sources", False)
-        trace.retrieval.conflict       = scores.get("conflict", False)
-        trace.retrieval.top_score      = scores.get("top_score", 0)
-        trace.retrieval.total_chunks   = scores.get("sources_found", 0)
-
-        # ── Step 3: Source sufficiency gate ────────────────────────────────
-        raw_chunks = getattr(self.knowledge, "_last_raw_chunks", [])
-        suff_result = self.sufficiency.evaluate(
-            scored_chunks=raw_chunks,
-            intent=routing_plan.intent,
-            routing_plan=routing_plan,
-        )
-        trace.sufficiency.verdict      = suff_result.verdict.value
-        trace.sufficiency.chunk_count  = suff_result.chunk_count
-        trace.sufficiency.avg_confidence = suff_result.avg_conf
-
-        # ── Step 4: Contradiction detection ───────────────────────────────
-        has_contradiction, contradiction_desc = self.contradiction.detect(
-            raw_chunks, tab_id=tab.id
-        )
-        contradiction_instruction = ""
-        if has_contradiction and contradiction_desc:
-            contradiction_instruction = self.contradiction.format_contradiction_response(
-                contradiction_desc, raw_chunks
-            )
-
-        # ── Step 5: Decision gate (with sufficiency override) ──────────────
-        plan = self.gate.evaluate(
-            query=user_input,
-            tab_id=tab.id,
-            confidence_score=scores.get("top_score", 75),
-            sources_found=suff_result.chunk_count,
-            sources_conflict=suff_result.verdict.value == "CONFLICTING",
-            context_complete=suff_result.verdict.value == "SUFFICIENT",
-        )
-
-        # Apply sufficiency override
-        override = self.sufficiency.gate_mode_override(suff_result, plan.mode.value)
-        if override:
-            from core.decision_gate import ResponseMode as RM
-            plan.mode = RM(override)
-
-        trace.gate_mode          = plan.mode.value
-        trace.worst_case         = plan.worst_case_assumed
-        trace.risk_domains       = plan.risk_domains
-        trace.safe_mode_triggered = plan.mode.value == "safe_mode"
-
-        # ── Step 6: LLM bounding ───────────────────────────────────────────
-        bounds = build_bounds(
-            plan=routing_plan,
-            mode=plan.mode,
-            has_sources=suff_result.verdict.value == "SUFFICIENT",
-            sources_conflict=suff_result.verdict.value == "CONFLICTING",
-            tab_id=tab.id,
-        )
-
-        if contradiction_instruction:
-            bounds = contradiction_instruction + "\n\n" + bounds
-
-        # ── Step 7: Memory relevance filter ───────────────────────────────
-        filtered_context = self.mem_filter.filter(
-            memory_data=self.memory.data,
-            query=user_input,
-            tab_id=tab.id,
-        )
-
-        map_context = ""
-        loc_estimate = self.memory.data["user"].get("location_estimate", "")
-        if loc_estimate and self.map_engine.is_ready():
-            results = self.map_engine.search_locations(loc_estimate, limit=1)
-            if results:
-                r = results[0]
-                map_context = self.map_engine.context_for_prompt(r.lat, r.lon)
-
-        combined_context = filtered_context
-        if map_context:
-            combined_context = filtered_context + "\n\n" + map_context
-
-        # ── Step 8: Build system prompt ────────────────────────────────────
-        system_prompt = self.llm.build_system_prompt(
-            tab_system=tab.system_prompt,
-            user_context=combined_context,
-            knowledge_context=knowledge_context,
-            confidence_note=confidence_note,
-            decision_addendum=plan.system_addendum,
-            llm_bounds=bounds,
-        )
-        trace.prompt_chars = len(system_prompt)
-
-        # ── Step 9: UX signals ─────────────────────────────────────────────
-        self._show_system_boundary(
-            mode=plan.mode.value,
-            sufficiency=suff_result.verdict.value,
-            has_sources=suff_result.verdict.value != "NONE",
-        )
-
-        # ── Step 10: CLARIFY mode — questions only, no LLM ────────────────
-        if plan.mode == ResponseMode.CLARIFY and plan.clarifications:
-            trace.clarify_triggered = True
-            questions = "\n".join(
-                f"{i+1}. {q}" for i, q in enumerate(plan.clarifications)
-            )
-            clarify_response = (
-                "Before I can give you the right guidance, I need a few details:\n\n"
-                + questions
-            )
+        # Step 10: CLARIFY — questions only, no LLM
+        if prepared.clarify_text:
             self.chat_view.start_assistant_message()
-            self._on_token(clarify_response)
+            self._on_token(prepared.clarify_text)
             self.tts.flush()
-            timing = self._finish_trace(clarify_response, tab)
+            timing = self._finish_trace(prepared.clarify_text, tab)
             self.chat_view.finish_assistant_message(**timing)
-            tab.add_message("assistant", clarify_response)
+            tab.add_message("assistant", prepared.clarify_text)
             self.tab_manager.save()
             self._end_generation()
             return
 
-        # ── Step 11: Stream response ───────────────────────────────────────
+        # Step 11: stream the response (tokens go to the chat and the voice)
         messages = self.context_mgr.prepare_messages(tab)
-
-        # Recency bias — ensure the most recent exchange appears last in history
-        # (closest to the new query) so the model attends to it most strongly
-        if len(messages) >= 4:
-            # Find and move the last assistant+user pair to the end
-            # messages are already in order, so this is just confirmation
-            # that prepare_messages returns them correctly ordered
-            pass  # context_manager already returns chronological order
-
         self.chat_view.start_assistant_message()
 
         self._llm_worker = LLMWorker(
-            self.llm, messages, system_prompt,
+            self.llm, messages, prepared.system_prompt,
             tab_id=tab.id,
-            intent=routing_plan.intent.value,
+            intent=prepared.intent,
         )
         self._llm_worker.token_received.connect(self._on_token)
         self._llm_worker.response_done.connect(
@@ -782,28 +683,6 @@ class MainWindow(QMainWindow):
         )
         self._llm_worker.error_occurred.connect(self._on_error)
         self._llm_worker.start()
-
-    def _show_system_boundary(self, mode: str, sufficiency: str, has_sources: bool):
-        """Show subtle UX signals about system state."""
-        signals = {
-            "emergency":   "🚨 Emergency mode — immediate action protocol",
-            "safe_mode":   "🛡 Safe mode — limited sources, conservative guidance only",
-            "clarify":     "❓ Clarification needed before proceeding",
-            "cautious":    "⚠ Caution mode — verify before acting",
-        }
-        source_note = ""
-        if not has_sources:
-            source_note = " | No verified sources found"
-        elif sufficiency == "CONFLICTING":
-            source_note = " | Sources conflict — conservative option shown"
-        elif sufficiency == "WEAK":
-            source_note = " | Limited sources — verify if possible"
-
-        msg = signals.get(mode, "")
-        if msg or source_note:
-            self.status_bar.showMessage(
-                (msg + source_note).strip(" |"), 6000
-            )
 
     def _on_token(self, token: str):
         """Handle incoming token from LLM stream."""
@@ -863,8 +742,7 @@ class MainWindow(QMainWindow):
         from PySide6.QtWidgets import QDialog
         dialog = QDialog(self)
         dialog.setWindowTitle("Quick Access")
-        dialog.setMinimumSize(500, 650)
-        dialog.resize(560, 700)
+        size_dialog(dialog, 500, 650, 560, 700)
 
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -1051,6 +929,12 @@ class MainWindow(QMainWindow):
     def _toggle_sidebar(self):
         visible = self.sidebar.isVisible()
         self.sidebar.setVisible(not visible)
+        if PHONE_LAYOUT:
+            # Phone: Info swaps the chat for the situation panel
+            self.chat_view.setVisible(visible)
+            self.input_bar.setVisible(visible)
+            self._sidebar_btn.setText("◀ Chat" if not visible else "▶ Info")
+            return
         self._sidebar_btn.setText("▶ Info" if visible else "◀ Info")
 
     def _show_settings(self):

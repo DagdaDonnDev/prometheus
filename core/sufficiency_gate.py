@@ -42,6 +42,9 @@ PEER_BLOCKED_INTENTS = {
     Intent.EMERGENCY,
 }
 
+# Intents that are conversation, not instruction — no sources needed
+COMPANION_INTENTS = {Intent.DISCUSS, Intent.REFLECT}
+
 # Minimum chunks required for SUFFICIENT verdict per intent
 MIN_CHUNKS = {
     Intent.EMERGENCY:  2,
@@ -194,12 +197,28 @@ class SourceSufficiencyGate:
         self,
         result: SufficiencyResult,
         current_mode: str,
+        intent: Optional[Intent] = None,
     ) -> Optional[str]:
         """
         Returns a mode override if sufficiency requires it.
         Returns None if current mode is acceptable.
+
+        Two exceptions:
+          - EMERGENCY is never downgraded. Someone bleeding needs the
+            emergency protocol even when the library has nothing.
+          - Companion intents (discuss, reflect) are never forced into
+            SAFE_MODE for lack of sources — they don't need sources to
+            be warm and present.
         """
         v = result.verdict
+
+        # Step 1: emergency always holds
+        if current_mode == "emergency":
+            return None
+
+        # Step 2: companion conversation works without sources
+        if intent in COMPANION_INTENTS and v in (Sufficiency.NONE, Sufficiency.WEAK):
+            return None
 
         if v == Sufficiency.NONE:
             # Force safe_mode unless already clarify
