@@ -214,6 +214,18 @@ def suggest_redirect(query: str, current_tab_id: str) -> str:
 
 # Default tab definitions
 DEFAULT_TABS = [
+    # Companion first — most people open Prometheus just to talk
+    Tab(
+        id="prometheus",
+        name="Prometheus",
+        icon="💬",
+        domains=TAB_DOMAINS["prometheus"],
+        system_prompt=(
+            "You are Prometheus. "
+            "Your full personality and approach are defined in your behavioural constraints. "
+            "Be that person completely."
+        )
+    ),
     Tab(
         id="survival",
         name="Survival",
@@ -303,17 +315,6 @@ DEFAULT_TABS = [
             "Assume basic improvised equipment unless told otherwise. "
             "Cover metallurgy, basic chemistry, medicine synthesis and materials. "
             "Include the dependency chain — what you need before you can make this."
-        )
-    ),
-    Tab(
-        id="prometheus",
-        name="Prometheus",
-        icon="💬",
-        domains=TAB_DOMAINS["prometheus"],
-        system_prompt=(
-            "You are Prometheus. "
-            "Your full personality and approach are defined in your behavioural constraints. "
-            "Be that person completely."
         )
     ),
     Tab(

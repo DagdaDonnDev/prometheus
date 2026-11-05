@@ -170,19 +170,10 @@ class QuickButton(QFrame):
         self.setMinimumHeight(80)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
-        # Custom colors per button
-        self.setStyleSheet(f"""
-            QFrame#quickBtn {{
-                background-color: {action['color']};
-                border: 1px solid {action['border']};
-                border-radius: 10px;
-            }}
-            QFrame#quickBtn:hover {{
-                background-color: {action['color'].replace('1a', '2a').replace('00', '1a')};
-                border: 1px solid {action['border']};
-                border-width: 2px;
-            }}
-        """)
+        # Neutral card; the action's colour is only a bar on the left edge
+        self.setStyleSheet(
+            f"QFrame#quickBtn {{ border-left: 4px solid {action['border']}; }}"
+        )
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 10, 12, 10)
@@ -198,7 +189,7 @@ class QuickButton(QFrame):
 
         label = QLabel(action["label"])
         label.setAlignment(Qt.AlignCenter)
-        label.setStyleSheet("color: #e8e8e8; font-size: 12px; font-weight: bold;")
+        label.setObjectName("quickLabel")
         layout.addWidget(label)
 
     def mousePressEvent(self, event):
@@ -256,11 +247,6 @@ class QuickAccessWidget(QWidget):
             # Section label
             lbl = QLabel(section_name.upper())
             lbl.setObjectName("sectionHeader")
-            lbl.setStyleSheet(
-                "color: #f0a500; font-size: 10px; "
-                "letter-spacing: 2px; font-weight: bold; "
-                "padding: 4px 0 2px 2px;"
-            )
             content_layout.addWidget(lbl)
 
             # 2x2 grid of buttons

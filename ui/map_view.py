@@ -785,18 +785,18 @@ class MapWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Toolbar
+        # Step 1: the canvas first — the toolbar's zoom buttons connect to it
+        self.canvas = MapCanvas(self.engine)
+        self.canvas.location_clicked.connect(self._on_location_clicked)
+
+        # Step 2: toolbar
         toolbar = self._build_toolbar()
         layout.addWidget(toolbar)
 
-        # Map + info panel
+        # Step 3: map + info panel
         content = QHBoxLayout()
         content.setSpacing(0)
         content.setContentsMargins(0, 0, 0, 0)
-
-        # Map canvas
-        self.canvas = MapCanvas(self.engine)
-        self.canvas.location_clicked.connect(self._on_location_clicked)
         content.addWidget(self.canvas)
 
         # Info panel
@@ -832,7 +832,7 @@ class MapWidget(QWidget):
         zoom_in.setFixedSize(28, 28)
         zoom_in.clicked.connect(self.canvas.zoom_in)
 
-        zoom_out = QPushButton("−")
+        zoom_out = QPushButton("-")
         zoom_out.setObjectName("smallBtn")
         zoom_out.setFixedSize(28, 28)
         zoom_out.clicked.connect(self.canvas.zoom_out)

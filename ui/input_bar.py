@@ -27,6 +27,7 @@ class ExpandingTextEdit(QTextEdit):
         self.setMaximumHeight(150)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.document().contentsChanged.connect(self._adjust_height)
+        self.setFixedHeight(44)   # start one line tall; grows as you type
 
     def _adjust_height(self):
         doc_height = int(self.document().size().height()) + 16
@@ -99,6 +100,9 @@ class InputBar(QFrame):
         text = self._text.toPlainText().strip()
         if text:
             self.message_submitted.emit(text)
+
+    def focus_input(self):
+        self._text.setFocus()
 
     def clear_input(self):
         self._text.clear()

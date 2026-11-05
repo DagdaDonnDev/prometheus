@@ -15,6 +15,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QPixmap
 
 from core.tabs import Tab
+from PySide6.QtCore import Signal
 from core.platform_info import PHONE_LAYOUT
 
 
@@ -143,6 +144,7 @@ class MessageBubble(QFrame):
         else:
             if not PHONE_LAYOUT:   # phone: no icon column, every pixel goes to text
                 icon = QLabel("⚡")
+                icon.setObjectName("bubbleIcon")
                 icon.setFixedWidth(24)
                 icon.setAlignment(Qt.AlignTop)
                 layout.addWidget(icon)
@@ -161,9 +163,15 @@ class MessageBubble(QFrame):
 
 
 class ChatView(QWidget):
+    suggestion_clicked   = Signal(str)   # a "try asking" question was tapped
+    assessment_requested = Signal()      # the situation-check card was tapped
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._current_bubble: MessageBubble = None
+        self._welcome = None
+        # Set by the window: returns True while the situation check hasn't been done
+        self.check_pending = lambda: False
         self._setup_ui()
 
     def _setup_ui(self):
@@ -175,6 +183,7 @@ class ChatView(QWidget):
         self._tab_info.setObjectName("tabInfo")
         self._tab_info.setAlignment(Qt.AlignCenter)
         self._tab_info.setFixedHeight(30)
+        self._tab_info.hide()   # the tab bar already shows which tab is open
         layout.addWidget(self._tab_info)
 
         self._summary_bar = QPushButton("📋 View conversation summary")
@@ -219,9 +228,27 @@ class ChatView(QWidget):
                 self._messages_layout.count() - 1, bubble
             )
 
+        # Empty tab → welcome panel. The situation check is only offered in
+        # Survival, so someone who just wants to chat isn't pushed into it.
+        if not tab.history:
+            from ui.welcome import WelcomePanel
+            self._welcome = WelcomePanel(
+                tab, show_check=(tab.id == "survival" and self.check_pending())
+            )
+            self._welcome.suggestion_clicked.connect(self.suggestion_clicked)
+            self._welcome.assessment_requested.connect(self.assessment_requested)
+            self._messages_layout.insertWidget(0, self._welcome)
+
         QTimer.singleShot(50, self._scroll_to_bottom)
 
+    def _hide_welcome(self):
+        """The first message replaces the welcome panel."""
+        if self._welcome is not None:
+            self._welcome.deleteLater()
+            self._welcome = None
+
     def _clear_messages(self):
+        self._welcome = None
         layout = self._messages_layout
         while layout.count() > 1:
             item = layout.takeAt(0)
@@ -229,6 +256,7 @@ class ChatView(QWidget):
                 item.widget().deleteLater()
 
     def add_message(self, role: str, content: str):
+        self._hide_welcome()
         bubble = MessageBubble(role, content)
         self._messages_layout.insertWidget(
             self._messages_layout.count() - 1, bubble
@@ -236,6 +264,7 @@ class ChatView(QWidget):
         QTimer.singleShot(50, self._scroll_to_bottom)
 
     def start_assistant_message(self):
+        self._hide_welcome()
         self._current_bubble = MessageBubble("assistant", "")
         self._messages_layout.insertWidget(
             self._messages_layout.count() - 1, self._current_bubble

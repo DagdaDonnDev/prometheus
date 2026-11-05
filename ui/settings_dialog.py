@@ -74,41 +74,92 @@ class SettingsDialog(QDialog):
         return w
 
     def _build_model_tab(self) -> QWidget:
+        """
+        Pick the models. Each box lists what's installed in Ollama, and
+        you can also type any model name (pull it first with ollama pull).
+        """
+        from core.llm import LLMEngine
+
         w = QWidget()
         form = QFormLayout(w)
         form.setSpacing(12)
 
-        self._model_edit = QLineEdit(self.config.llm_model)
-        self._model_edit.setPlaceholderText("e.g. llama3.2:3b")
-        form.addRow("LLM model:", self._model_edit)
-
         self._ollama_url = QLineEdit(self.config.ollama_url)
-        form.addRow("Ollama URL:", self._ollama_url)
+        self._ollama_url.setPlaceholderText("http://localhost:11434")
+        form.addRow("Ollama address:", self._ollama_url)
+
+        self._fast_model = QComboBox()
+        self._fast_model.setEditable(True)
+        form.addRow("Knowledge tabs model:", self._fast_model)
+
+        self._companion_model = QComboBox()
+        self._companion_model.setEditable(True)
+        form.addRow("Companion tab model:", self._companion_model)
+
+        row = QHBoxLayout()
+        refresh = QPushButton("Check Ollama")
+        refresh.clicked.connect(self._refresh_models)
+        self._ollama_status = QLabel("")
+        self._ollama_status.setObjectName("infoLabel")
+        self._ollama_status.setWordWrap(True)
+        row.addWidget(refresh)
+        row.addWidget(self._ollama_status, 1)
+        form.addRow(row)
 
         self._max_tokens = QSpinBox()
         self._max_tokens.setMinimum(50)
         self._max_tokens.setMaximum(2000)
         self._max_tokens.setValue(self.config.max_tokens)
-        form.addRow("Max response tokens:", self._max_tokens)
+        form.addRow("Max response length:", self._max_tokens)
 
         self._rag_results = QSpinBox()
         self._rag_results.setMinimum(1)
         self._rag_results.setMaximum(10)
         self._rag_results.setValue(self.config.rag_results)
-        form.addRow("Knowledge results:", self._rag_results)
+        form.addRow("Library passages used:", self._rag_results)
 
         note = QLabel(
-            "Recommended model: llama3.2:3b\n"
-            "Pull with: ollama pull llama3.2:3b\n\n"
-            "Companion tab can use a different model:\n"
-            "ollama pull llama3.2:3b\n\n"
-            "Smaller fallback: llama3.2:1b\n"
-            "Larger quality: mistral:7b-instruct-q4_0"
+            "Get a model:  ollama pull llama3.2:3b\n"
+            "Smaller / faster:  llama3.2:1b      Better quality:  llama3.1:8b\n"
+            "The companion tab can use a bigger model than the knowledge tabs."
         )
         note.setObjectName("noteLabel")
         form.addRow(note)
 
+        self._llm_probe = LLMEngine(self.config)
+        self._refresh_models()
         return w
+
+    def _refresh_models(self):
+        """Step 1: reach Ollama at the typed address. Step 2: fill both boxes."""
+        from core.config import Config as _C
+        probe = self._llm_probe
+        probe.config = _C(**{**self.config.__dict__,
+                             "ollama_url": self._ollama_url.text().strip() or self.config.ollama_url})
+        current = (self._fast_model.currentText() or self.config.fast_model,
+                   self._companion_model.currentText() or self.config.companion_model)
+
+        if probe.is_available():
+            installed = probe.list_models()
+            self._ollama_status.setText(
+                f"Connected — {len(installed)} model(s) installed." if installed
+                else "Connected, but no models yet. Run: ollama pull llama3.2:3b"
+            )
+        else:
+            installed = []
+            self._ollama_status.setText(
+                f"Can't reach Ollama ({probe.last_error}). Open the Ollama app, "
+                f"or run: ollama serve"
+            )
+
+        for box, value in ((self._fast_model, current[0]), (self._companion_model, current[1])):
+            box.blockSignals(True)
+            box.clear()
+            box.addItems(installed)
+            if value and value not in installed:
+                box.addItem(value)
+            box.setCurrentText(value)
+            box.blockSignals(False)
 
     def _build_voice_tab(self) -> QWidget:
         w = QWidget()
@@ -203,8 +254,11 @@ class SettingsDialog(QDialog):
             u["known_skills"] = [s.strip() for s in skills_text.split(",") if s.strip()]
 
         # Save model settings
-        self.config.llm_model = self._model_edit.text().strip()
-        self.config.ollama_url = self._ollama_url.text().strip()
+        fast = self._fast_model.currentText().strip() or self.config.fast_model
+        self.config.fast_model      = fast
+        self.config.llm_model       = fast      # summaries and checks use the same model
+        self.config.companion_model = self._companion_model.currentText().strip() or fast
+        self.config.ollama_url      = self._ollama_url.text().strip() or "http://localhost:11434"
         self.config.max_tokens = self._max_tokens.value()
         self.config.rag_results = self._rag_results.value()
 

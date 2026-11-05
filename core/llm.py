@@ -32,24 +32,64 @@ class LLMEngine:
         self.base_url = config.ollama_url
 
     def is_available(self) -> bool:
-        """Check if Ollama is running."""
-        try:
-            r = requests.get(f"{self.base_url}/api/tags", timeout=3)
-            return r.status_code == 200
-        except Exception:
-            return False
+        """
+        Check Ollama is answering.
 
-    def model_available(self) -> bool:
-        """Check if the configured model is pulled."""
+        On Windows "localhost" can resolve to the IPv6 address first while
+        Ollama only listens on 127.0.0.1 — if localhost fails, try 127.0.0.1
+        and switch to it when it works.
+        """
+        self.last_error = ""
+        for url in self._candidate_urls():
+            try:
+                r = requests.get(f"{url}/api/tags", timeout=3)
+                if r.status_code == 200:
+                    self.base_url = url
+                    return True
+                self.last_error = f"HTTP {r.status_code}"
+            except requests.exceptions.ConnectionError:
+                self.last_error = "nothing is listening there"
+            except requests.exceptions.Timeout:
+                self.last_error = "no answer within 3 seconds"
+            except Exception as e:
+                self.last_error = str(e)
+        return False
+
+    def _candidate_urls(self) -> List[str]:
+        url = (self.config.ollama_url or "http://localhost:11434").rstrip("/")
+        urls = [url]
+        if "://localhost" in url:
+            urls.append(url.replace("://localhost", "://127.0.0.1"))
+        return urls
+
+    def list_models(self) -> List[str]:
+        """Names of the models pulled into Ollama (empty if unreachable)."""
         try:
             r = requests.get(f"{self.base_url}/api/tags", timeout=3)
             if r.status_code == 200:
-                models = [m["name"] for m in r.json().get("models", [])]
-                model_base = self.config.llm_model.split(":")[0]
-                return any(model_base in m for m in models)
+                return sorted(m["name"] for m in r.json().get("models", []))
         except Exception:
             pass
-        return False
+        return []
+
+    @staticmethod
+    def _has_model(installed: List[str], wanted: str) -> bool:
+        """'llama3.2' matches 'llama3.2:latest'; 'llama3.2:3b' must match exactly."""
+        if not wanted:
+            return False
+        if ":" in wanted:
+            return wanted in installed
+        return any(m.split(":")[0] == wanted for m in installed)
+
+    def missing_models(self) -> List[str]:
+        """Models the settings ask for that aren't pulled yet."""
+        installed = self.list_models()
+        wanted = {self.config.fast_model, self.config.companion_model}
+        return sorted(m for m in wanted if m and not self._has_model(installed, m))
+
+    def model_available(self) -> bool:
+        """True if every model the settings use is pulled."""
+        return not self.missing_models()
 
     def stream(
         self,
@@ -68,7 +108,7 @@ class LLMEngine:
         Temperature varies by intent — lower for safety-critical,
         higher for conversation and reflection.
         """
-        model = self.config.model_for_tab(tab_id) if tab_id else self.config.llm_model
+        model = self.config.model_for_tab(tab_id) if tab_id else self.config.fast_model
         temperature = INTENT_TEMPERATURE.get(intent, DEFAULT_TEMPERATURE)
 
         try:
@@ -138,7 +178,7 @@ class LLMEngine:
         before it can check it. Raises on connection or HTTP errors
         so the caller can fall back to the Knowledge Path.
         """
-        model = self.config.model_for_tab(tab_id) if tab_id else self.config.llm_model
+        model = self.config.model_for_tab(tab_id) if tab_id else self.config.fast_model
         payload = {
             "model": model,
             "messages": [
@@ -166,7 +206,7 @@ class LLMEngine:
         """
         try:
             payload = {
-                "model": self.config.llm_model,
+                "model": self.config.fast_model,
                 "messages": [{
                     "role": "user",
                     "content": (

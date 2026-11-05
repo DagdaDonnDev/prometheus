@@ -261,7 +261,9 @@ class SkillTreeWidget(QWidget):
 
     def _make_stage(self, stage_data: dict) -> QFrame:
         frame = QFrame()
-        frame.setObjectName("priorityCard")
+        frame.setObjectName("stageCard")
+        # The stage's colour is a bar on the card's edge, never the text
+        frame.setStyleSheet(f"#stageCard {{ border-left: 4px solid {stage_data['color']}; }}")
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(12, 8, 12, 8)
         layout.setSpacing(6)
@@ -269,14 +271,12 @@ class SkillTreeWidget(QWidget):
         # Stage header
         header_row = QHBoxLayout()
 
-        color = stage_data["color"]
-        stage_label = QLabel(f"● {stage_data['stage']}: {stage_data['name']}")
-        stage_label.setObjectName("sectionHeader")
+        stage_label = QLabel(f"{stage_data['stage']}: {stage_data['name']}")
+        stage_label.setObjectName("stageTitle")
         font = stage_label.font()
         font.setPointSize(11)
         font.setBold(True)
         stage_label.setFont(font)
-        stage_label.setStyleSheet(f"color: {color};")
 
         days_label = QLabel(stage_data["days"])
         days_label.setObjectName("infoLabel")
@@ -284,8 +284,8 @@ class SkillTreeWidget(QWidget):
         # Count completed in this stage
         stage_skills = stage_data["skills"]
         done = sum(1 for s in stage_skills if s["id"] in self._completed)
-        count_label = QLabel(f"{done}/{len(stage_skills)}")
-        count_label.setObjectName("priorityNum")
+        count_label = QLabel(f"{done} of {len(stage_skills)} done")
+        count_label.setObjectName("stageCount")
 
         header_row.addWidget(stage_label)
         header_row.addStretch()

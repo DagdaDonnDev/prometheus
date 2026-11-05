@@ -9,6 +9,22 @@ import os
 # Ensure we're running from project root
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
+# Step 1: check the packages the window needs before importing it, so a
+# missing install gives one clear instruction instead of a traceback
+_missing = []
+for _module, _package in (("PySide6", "PySide6"), ("requests", "requests")):
+    try:
+        __import__(_module)
+    except ImportError:
+        _missing.append(_package)
+if _missing:
+    print(
+        "Prometheus can't start — missing Python packages: " + ", ".join(_missing) + "\n\n"
+        "Install everything with the same Python you used to run this:\n\n"
+        f'    "{sys.executable}" -m pip install -r requirements.txt\n'
+    )
+    sys.exit(1)
+
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon, QFontDatabase, QFont

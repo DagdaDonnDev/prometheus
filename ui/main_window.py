@@ -89,9 +89,10 @@ class MainWindow(QMainWindow):
         self._check_ollama()
         self._start_background_init()
 
-        # Show assessment on first run
-        if not self.memory.data["user"]["name"]:
-            QTimer.singleShot(500, self._show_assessment)
+        # First launch: no popup. Each empty tab shows a welcome panel
+        # (Survival offers the situation check). The cursor starts in the
+        # message box so you can just type.
+        QTimer.singleShot(0, self.input_bar.focus_input)
 
     def _show_assessment(self):
         """Show situation assessment mode."""
@@ -113,6 +114,11 @@ class MainWindow(QMainWindow):
         dialog.exec()
         self.sidebar.refresh()
         self._day_label.setText(self._get_day_string())
+        # Show what the check filled in, and drop the "situation check" card
+        if self._has_situation_data() and not PHONE_LAYOUT and not self.sidebar.isVisible():
+            self._toggle_sidebar()
+        if not self._generating:
+            self._load_tab(self.tab_manager.active_tab_id)
 
     def _show_skill_tree(self):
         """Show civilization skill tree."""
@@ -241,8 +247,11 @@ class MainWindow(QMainWindow):
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.setHandleWidth(1)
 
-        # Chat view
+        # Chat view (welcome panel questions send straight away)
         self.chat_view = ChatView()
+        self.chat_view.check_pending = lambda: not self.memory.data["user"].get("assessment_done")
+        self.chat_view.suggestion_clicked.connect(self._on_send)
+        self.chat_view.assessment_requested.connect(self._show_assessment)
         self.splitter.addWidget(self.chat_view)
 
         # Sidebar (situation, inventory, map)
@@ -260,7 +269,10 @@ class MainWindow(QMainWindow):
         if PHONE_LAYOUT:
             self.sidebar.setMaximumWidth(16777215)
             self.sidebar.hide()
-            self._sidebar_btn.setText("▶ Info")
+        elif not self._has_situation_data():
+            # Desktop: a panel of empty "—" rows is just noise on a fresh start
+            self.sidebar.hide()
+        self._sidebar_btn.setChecked(self.sidebar.isVisibleTo(self))
 
         main_layout.addWidget(self.splitter, 1)   # chat takes all spare height
 
@@ -277,97 +289,76 @@ class MainWindow(QMainWindow):
         self.status_bar.setMaximumHeight(24)
         self.setStatusBar(self.status_bar)
 
-        self._day_label = QLabel(self._get_day_string())
-        self.status_bar.addPermanentWidget(self._day_label)
 
         # Load active tab
         self._load_tab(self.tab_manager.active_tab_id)
 
     def _build_header(self) -> QWidget:
+        """
+        Header: name and day on the left; the few things people use often
+        on the right; everything else in the More menu.
+        """
+        from PySide6.QtWidgets import QMenu
+
         header = QFrame()
         header.setObjectName("header")
-        header.setFixedHeight(50)
+        header.setFixedHeight(52)
 
         layout = QHBoxLayout(header)
-        layout.setContentsMargins(16, 0, 16, 0)
+        layout.setContentsMargins(16, 0, 12, 0)
+        layout.setSpacing(4)
 
-        title = QLabel("⚡" if PHONE_LAYOUT else "⚡ PROMETHEUS")
+        # Left: name and day
+        title = QLabel("P" if PHONE_LAYOUT else "PROMETHEUS")
         title.setObjectName("headerTitle")
         font = title.font()
-        font.setPointSize(16)
+        font.setPointSize(13)
         font.setBold(True)
         title.setFont(font)
-
         layout.addWidget(title)
+
+        self._day_label = QLabel(self._get_day_string())
+        self._day_label.setObjectName("headerDay")
+        layout.addWidget(self._day_label)
         layout.addStretch()
 
-        # Sidebar toggle
-        self._sidebar_btn = QPushButton("◀ Info")
-        self._sidebar_btn.setObjectName("headerBtn")
-        self._sidebar_btn.setFixedSize(70, 30)
-        self._sidebar_btn.clicked.connect(self._toggle_sidebar)
-        layout.addWidget(self._sidebar_btn)
+        def header_button(text, tip, slot, checkable=False):
+            btn = QPushButton(text)
+            btn.setObjectName("headerBtn")
+            btn.setToolTip(tip)
+            btn.setCheckable(checkable)
+            btn.setCursor(Qt.PointingHandCursor)
+            if slot:
+                btn.clicked.connect(slot)
+            layout.addWidget(btn)
+            return btn
 
-        # Skill tree button
-        skill_btn = QPushButton("🌱 Skills")
-        skill_btn.setObjectName("headerBtn")
-        skill_btn.setFixedSize(70, 30)
-        skill_btn.clicked.connect(self._show_skill_tree)
-        layout.addWidget(skill_btn)
+        # Right: everyday actions (on a phone these move into More)
+        if not PHONE_LAYOUT:
+            header_button("Situation check", "Five quick questions → a priority list",
+                          self._show_assessment)
+            header_button("Skills", "Rebuild progress — 55 skills in 8 stages",
+                          self._show_skill_tree)
+            header_button("Map", "Offline world map", self._show_map)
+        self._sidebar_btn = header_button("Info", "Show or hide your situation panel",
+                                          self._toggle_sidebar, checkable=True)
+        header_button("Settings", "Name, model, voice", self._show_settings)
 
-        # Assessment button
-        assess_btn = QPushButton("📋 Assess")
-        assess_btn.setObjectName("headerBtn")
-        assess_btn.setFixedSize(75, 30)
-        assess_btn.clicked.connect(self._show_assessment)
-        layout.addWidget(assess_btn)
-
-        # Print reference button
-        print_btn = QPushButton("🖨️")
-        print_btn.setObjectName("headerBtn")
-        print_btn.setFixedSize(30, 30)
-        print_btn.setToolTip("Generate printable emergency reference")
-        print_btn.clicked.connect(self._generate_print_reference)
-        layout.addWidget(print_btn)
-
-        # Map button
-        map_btn = QPushButton("🌍")
-        map_btn.setObjectName("headerBtn")
-        map_btn.setFixedSize(30, 30)
-        map_btn.setToolTip("World Map")
-        map_btn.clicked.connect(self._show_map)
-        layout.addWidget(map_btn)
-
-        # Personal documents button
-        docs_btn = QPushButton("📎")
-        docs_btn.setObjectName("headerBtn")
-        docs_btn.setFixedSize(30, 30)
-        docs_btn.setToolTip("Add personal documents as context")
-        docs_btn.clicked.connect(self._show_doc_context)
-        layout.addWidget(docs_btn)
-
-        # Settings
-        settings_btn = QPushButton("⚙")
-        settings_btn.setObjectName("headerBtn")
-        settings_btn.setFixedSize(30, 30)
-        settings_btn.clicked.connect(self._show_settings)
-        layout.addWidget(settings_btn)
-
-        # Reset
-        reset_btn = QPushButton("↺")
-        reset_btn.setObjectName("headerBtn")
-        reset_btn.setFixedSize(30, 30)
-        reset_btn.setToolTip("Reset memory, tab, or full wipe")
-        reset_btn.clicked.connect(self._show_reset_dialog)
-        layout.addWidget(reset_btn)
-
-        # Dev panel (Ctrl+D shortcut too)
-        self._dev_btn = QPushButton("🔬")
-        self._dev_btn.setObjectName("headerBtn")
-        self._dev_btn.setFixedSize(30, 30)
-        self._dev_btn.setToolTip("Dev panel — query observability (Ctrl+D)")
-        self._dev_btn.clicked.connect(self._show_dev_panel)
-        layout.addWidget(self._dev_btn)
+        # More: occasional and advanced actions
+        more = header_button("More ▾", "More actions", None)
+        menu = QMenu(more)
+        if PHONE_LAYOUT:
+            menu.addAction("Situation check", self._show_assessment)
+            menu.addAction("Skills", self._show_skill_tree)
+            menu.addAction("Map", self._show_map)
+            menu.addSeparator()
+        menu.addAction("Personal documents…", self._show_doc_context)
+        menu.addAction("Print emergency reference (PDF)", self._generate_print_reference)
+        menu.addSeparator()
+        menu.addAction("Reset…", self._show_reset_dialog)
+        menu.addSeparator()
+        menu.addAction("Developer panel   Ctrl+D", self._show_dev_panel)
+        more.setMenu(menu)
 
         return header
 
@@ -394,28 +385,51 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def _check_ollama(self):
-        if not self.llm.is_available():
+        """Start a background Ollama check (never blocks the window)."""
+        from ui.workers import OllamaCheckWorker
+        if getattr(self, "_ollama_worker", None) and self._ollama_worker.isRunning():
+            return
+        self._ollama_worker = OllamaCheckWorker(self.llm)
+        self._ollama_worker.checked.connect(self._on_ollama_checked)
+        self._ollama_worker.start()
+
+    def _on_ollama_checked(self, result: dict):
+        """
+        Show what's wrong in plain words, and keep re-checking every
+        10 seconds until Ollama and the models are ready.
+        """
+        if not hasattr(self, "_ollama_timer"):
+            self._ollama_timer = QTimer(self)
+            self._ollama_timer.setInterval(10_000)
+            self._ollama_timer.timeout.connect(self._check_ollama)
+
+        url = self.llm.base_url
+        if not result["reachable"]:
             if PHONE_LAYOUT:
-                # A phone can't run Ollama itself — it talks to a computer on the same WiFi
-                self.status_bar.showMessage(
-                    f"⚠ Can't reach Ollama at {self.config.ollama_url}. "
-                    "Set your computer's address in ⚙ Settings.", 0
-                )
+                msg = (f"⚠ Can't reach Ollama at {url}. Set your computer's "
+                       "address in Settings → Model.")
             else:
-                self.status_bar.showMessage(
-                    "⚠ Ollama not running. Start with: ollama serve", 0
-                )
-        elif not self.llm.model_available():
-            model = self.config.llm_model
+                msg = (f"⚠ Can't reach Ollama at {url} ({result['error']}). "
+                       "Open the Ollama app or run: ollama serve — checking again every 10 s")
+            self.status_bar.showMessage(msg, 0)
+            self._ollama_timer.start()
+            return
+
+        if result["missing"]:
+            pulls = "   ".join(f"ollama pull {m}" for m in result["missing"])
             self.status_bar.showMessage(
-                f"⚠ Model not found. Run: ollama pull {model}", 0
+                f"⚠ Ollama is running but the model isn't installed. Run: {pulls} "
+                "— or pick an installed one in Settings → Model", 0
             )
-        else:
-            voice_name = self.tts.current_voice_name()
-            if voice_name and voice_name != "None":
-                self.status_bar.showMessage(f"✓ Ready  ·  Voice: {voice_name}", 5000)
-            else:
-                self.status_bar.showMessage("✓ Ready", 3000)
+            self._ollama_timer.start()
+            return
+
+        self._ollama_timer.stop()
+        voice_name = self.tts.current_voice_name()
+        ready = f"✓ Ready · {self.config.fast_model}"
+        if voice_name and voice_name != "None":
+            ready += f" · Voice: {voice_name}"
+        self.status_bar.showMessage(ready, 6000)
 
     def _start_background_init(self):
         """Initialize heavy components in background after UI shown."""
@@ -923,19 +937,27 @@ class MainWindow(QMainWindow):
         if parent_dialog:
             parent_dialog.accept()
         self.status_bar.showMessage("✓ Full reset complete", 3000)
-        # Offer assessment on full reset
-        QTimer.singleShot(800, self._show_assessment)
+        # The welcome panel offers the situation check again
+
+    def _has_situation_data(self) -> bool:
+        """True once there's anything worth showing in the situation panel."""
+        d = self.memory.data
+        u, inv, alerts = d["user"], d["inventory"], d["alerts"]
+        return bool(
+            u.get("name") or u.get("location_estimate") or
+            any(v for v in inv.values()) or any(v for v in alerts.values()) or
+            d["progress"].get("completed")
+        )
 
     def _toggle_sidebar(self):
         visible = self.sidebar.isVisible()
         self.sidebar.setVisible(not visible)
+        self._sidebar_btn.setChecked(not visible)
         if PHONE_LAYOUT:
             # Phone: Info swaps the chat for the situation panel
             self.chat_view.setVisible(visible)
             self.input_bar.setVisible(visible)
-            self._sidebar_btn.setText("◀ Chat" if not visible else "▶ Info")
-            return
-        self._sidebar_btn.setText("▶ Info" if visible else "◀ Info")
+            self._sidebar_btn.setText("Chat" if not visible else "Info")
 
     def _show_settings(self):
         from ui.settings_dialog import SettingsDialog
@@ -943,7 +965,9 @@ class MainWindow(QMainWindow):
         dialog.exec()
         self.memory.save()
         self.config.save()
-        # Apply voice change immediately
+        # Apply changes now — no restart needed
+        self.llm.base_url = self.config.ollama_url.rstrip("/")
+        self._check_ollama()
         if self.config.tts_voice:
             self.tts.set_voice(self.config.tts_voice)
         self._day_label.setText(self._get_day_string())

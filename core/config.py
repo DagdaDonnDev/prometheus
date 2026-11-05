@@ -58,6 +58,14 @@ class Config:
         if os.path.exists(CONFIG_PATH):
             with open(CONFIG_PATH, "r") as f:
                 data = json.load(f)
-            return cls(**{k: v for k, v in data.items()
+            cfg = cls(**{k: v for k, v in data.items()
                          if k in cls.__dataclass_fields__})
+            # Older Settings only changed llm_model, which chats never used.
+            # If that was changed and the per-tab models weren't, carry it over.
+            default = cls.__dataclass_fields__["fast_model"].default
+            if cfg.llm_model and cfg.llm_model != default and cfg.fast_model == default:
+                cfg.fast_model = cfg.llm_model
+                if cfg.companion_model == default:
+                    cfg.companion_model = cfg.llm_model
+            return cfg
         return cls()

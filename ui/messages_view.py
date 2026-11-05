@@ -56,9 +56,7 @@ class MessageBubble(QFrame):
         name = "" if not msg.inbound else f"{msg.sender_name}: "
 
         if is_alert:
-            self.setStyleSheet(
-                "background-color: #3a0000; border: 1px solid #aa0000; border-radius: 8px;"
-            )
+            self.setObjectName("alertMessage")   # red bar on the edge, neutral text
 
         label = QLabel(f"{name}{text}")
         label.setWordWrap(True)
@@ -138,9 +136,6 @@ class MessagesWidget(QWidget):
 
         nodes_label = QLabel("  NODES ONLINE")
         nodes_label.setObjectName("sectionHeader")
-        nodes_label.setStyleSheet(
-            "color: #f0a500; font-size: 10px; letter-spacing: 1px; padding: 6px 8px;"
-        )
         left_layout.addWidget(nodes_label)
 
         self._node_list = QListWidget()
@@ -366,8 +361,7 @@ class MessagesWidget(QWidget):
         cancel = QPushButton("Cancel")
         cancel.clicked.connect(dialog.reject)
         send = QPushButton("⚠ Send Alert")
-        send.setObjectName("primaryBtn")
-        send.setStyleSheet("background-color: #8b0000; color: white;")
+        send.setObjectName("dangerBtn")
         send.clicked.connect(lambda: (
             self.p2p.send_alert(text_input.text()),
             dialog.accept()

@@ -1,610 +1,601 @@
-/* Prometheus - Dark Theme */
+/* ============================================================
+   Prometheus — dark theme
+   ------------------------------------------------------------
+   Rules (owner's standing preferences):
+     - Text is always neutral (white / grey). Colour lives in
+       bars, borders and fills — never in text.
+     - No pills or badges.
+     - Dark backgrounds everywhere, including dialogs.
+   Palette
+     window   #121212   surface #171717   card   #1e1e1e
+     raised   #252525   border  #2b2b2b   strong #3a3a3a
+     text     #ececec   text-2  #a6a6a6   text-3 #6f6f6f
+     accent   #f0a500   (bars, borders, primary fill only)
+   ============================================================ */
 
-/* ── Base ─────────────────────────────────────────────── */
-QMainWindow, QWidget {
-    background-color: #1a1a1a;
-    color: #e8e8e8;
-    font-family: "Segoe UI", "SF Pro Text", "Ubuntu", sans-serif;
+/* ── Base ─────────────────────────────────────────────────── */
+QMainWindow, QDialog {
+    background-color: #121212;
+}
+QWidget {
+    color: #ececec;
+    font-family: "Segoe UI", "SF Pro Text", "Ubuntu", "Noto Sans", sans-serif;
     font-size: 13px;
 }
+/* Labels never paint their own box (this caused the black
+   rectangles behind text on cards) */
+QLabel {
+    background: transparent;
+}
+QToolTip {
+    background-color: #252525;
+    color: #ececec;
+    border: 1px solid #3a3a3a;
+    padding: 4px 8px;
+}
 
+QScrollArea, QScrollArea > QWidget > QWidget {
+    background: transparent;
+    border: none;
+}
 QScrollBar:vertical {
-    background: #1a1a1a;
-    width: 6px;
-    border-radius: 3px;
+    background: transparent;
+    width: 8px;
+    margin: 2px;
 }
 QScrollBar::handle:vertical {
-    background: #444;
+    background: #3a3a3a;
     border-radius: 3px;
     min-height: 30px;
 }
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-    height: 0;
-}
+QScrollBar::handle:vertical:hover { background: #4a4a4a; }
+QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 QScrollBar:horizontal {
-    background: #1a1a1a;
+    background: transparent;
     height: 6px;
+    margin: 1px;
 }
 QScrollBar::handle:horizontal {
-    background: #444;
-    border-radius: 3px;
+    background: #3a3a3a;
+    border-radius: 2px;
 }
 
-/* ── Header ───────────────────────────────────────────── */
+QMenu {
+    background-color: #1e1e1e;
+    border: 1px solid #3a3a3a;
+    padding: 4px;
+}
+QMenu::item {
+    padding: 7px 24px 7px 12px;
+    border-left: 3px solid transparent;
+}
+QMenu::item:selected {
+    background-color: #252525;
+    border-left: 3px solid #f0a500;
+}
+QMenu::separator {
+    height: 1px;
+    background: #2b2b2b;
+    margin: 4px 6px;
+}
+
+/* ── Header ───────────────────────────────────────────────── */
 #header {
-    background-color: #111111;
-    border-bottom: 1px solid #2a2a2a;
+    background-color: #0e0e0e;
+    border-bottom: 1px solid #2b2b2b;
 }
-
 #headerTitle {
-    color: #f0a500;
-    letter-spacing: 2px;
+    color: #ececec;
+    letter-spacing: 3px;
+    border-left: 3px solid #f0a500;
+    padding-left: 10px;
 }
-
+#headerDay {
+    color: #a6a6a6;
+    font-size: 12px;
+    padding-left: 14px;
+}
 #headerBtn {
-    background-color: #2a2a2a;
-    color: #ccc;
-    border: 1px solid #333;
+    background-color: transparent;
+    color: #a6a6a6;
+    border: 1px solid transparent;
     border-radius: 6px;
-    padding: 4px 8px;
+    padding: 5px 10px;
 }
 #headerBtn:hover {
-    background-color: #333;
-    color: #fff;
+    background-color: #1e1e1e;
+    color: #ececec;
+    border-color: #2b2b2b;
 }
+#headerBtn:checked {
+    color: #ececec;
+    border-bottom: 2px solid #f0a500;
+}
+#headerBtn::menu-indicator { image: none; width: 0; }
 
-/* ── Tab Bar ──────────────────────────────────────────── */
+/* ── Tab bar ──────────────────────────────────────────────── */
 #tabBar {
-    background-color: #141414;
-    border-bottom: 1px solid #2a2a2a;
+    background-color: #121212;
+    border-bottom: 1px solid #2b2b2b;
 }
-
 #tabScroll, #tabContainer {
     background-color: transparent;
     border: none;
 }
-
-QScrollArea#tabScroll {
-    border: none;
-    background: transparent;
-}
+QScrollArea#tabScroll { border: none; background: transparent; }
 
 #tabBtn {
-    background-color: #1e1e1e;
-    color: #888;
-    border: 1px solid #2a2a2a;
-    border-radius: 6px;
+    background-color: transparent;
+    color: #a6a6a6;
+    border: none;
+    border-bottom: 2px solid transparent;
+    border-radius: 0px;
     padding: 4px 12px;
-    font-size: 12px;
+    font-size: 13px;
 }
 #tabBtn:hover {
-    background-color: #252525;
-    color: #ccc;
+    color: #ececec;
+    border-bottom: 2px solid #3a3a3a;
 }
 #tabBtnActive, #tabBtn:checked {
-    background-color: #2a2a2a;
-    color: #f0a500;
-    border: 1px solid #f0a500;
-    border-radius: 6px;
+    background-color: transparent;
+    color: #ececec;
+    border: none;
+    border-bottom: 2px solid #f0a500;
+    border-radius: 0px;
     padding: 4px 12px;
-    font-size: 12px;
-    font-weight: bold;
+    font-size: 13px;
+    /* same weight as inactive tabs — bold text overflowed its measured width */
 }
-
-#addTabBtn {
-    background-color: #1e1e1e;
-    color: #666;
-    border: 1px solid #2a2a2a;
+#addTabBtn, #quickAccessBtn {
+    background-color: transparent;
+    color: #a6a6a6;
+    border: 1px solid #2b2b2b;
     border-radius: 6px;
-    font-size: 16px;
+    font-size: 13px;
+    padding: 0px 10px;
 }
-#addTabBtn:hover {
-    background-color: #252525;
-    color: #f0a500;
-}
-
-#quickAccessBtn {
-    background-color: #2a1a00;
-    color: #f0a500;
-    border: 1px solid #6a3a00;
-    border-radius: 6px;
-    font-size: 16px;
-    font-weight: bold;
-}
-#quickAccessBtn:hover {
-    background-color: #3a2a00;
+#addTabBtn { padding: 0px; font-size: 16px; }
+#addTabBtn:hover, #quickAccessBtn:hover {
+    color: #ececec;
     border-color: #f0a500;
 }
 
-/* ── Chat View ────────────────────────────────────────── */
+/* ── Chat ─────────────────────────────────────────────────── */
 #chatScroll, #messagesWidget {
-    background-color: #1a1a1a;
+    background-color: #121212;
     border: none;
 }
-
 #tabInfo {
-    background-color: #141414;
-    color: #666;
+    background-color: #121212;
+    color: #6f6f6f;
     font-size: 11px;
-    border-bottom: 1px solid #222;
 }
-
 #summaryBar {
-    background-color: #1e1e1e;
-    color: #888;
+    background-color: #171717;
+    color: #a6a6a6;
     border: none;
-    border-bottom: 1px solid #222;
+    border-bottom: 1px solid #2b2b2b;
     text-align: left;
     padding-left: 16px;
     font-size: 11px;
 }
 #summaryBar:hover {
-    color: #f0a500;
-    background-color: #222;
+    color: #ececec;
+    border-left: 3px solid #f0a500;
 }
 
-/* ── Message Bubbles ──────────────────────────────────── */
-#bubble_user {
-    background-color: transparent;
-}
+#bubble_user, #bubble_assistant { background-color: transparent; }
 #bubble_user QLabel {
-    background-color: #2a3d2a;
-    color: #d4ecd4;
+    background-color: #1f2b22;
+    color: #ececec;
+    border: 1px solid #2c3d30;
     border-radius: 12px;
     padding: 10px 14px;
-    max-width: 600px;
-}
-
-#bubble_assistant {
-    background-color: transparent;
 }
 #bubble_assistant QLabel {
-    background-color: #1e1e1e;
-    color: #e8e8e8;
-    border-radius: 12px;
+    background-color: #1a1a1a;
+    color: #ececec;
+    border: 1px solid #2b2b2b;
+    border-left: 3px solid #f0a500;
+    border-radius: 10px;
     padding: 10px 14px;
-    max-width: 680px;
-    border: 1px solid #2a2a2a;
+}
+#bubble_assistant #bubbleIcon {
+    background: transparent;
+    border: none;
+    padding: 0;
+    color: #6f6f6f;
 }
 
-/* ── Input Bar ────────────────────────────────────────── */
-#inputBar {
-    background-color: #141414;
-    border-top: 1px solid #2a2a2a;
+#timingStamp {
+    color: #6f6f6f;
+    font-size: 10px;
+    padding: 0px 0px 2px 0px;
 }
 
-QTextEdit {
-    background-color: #1e1e1e;
-    color: #e8e8e8;
-    border: 1px solid #333;
+/* Welcome panel (empty tab) */
+#welcomePanel { background: transparent; }
+#welcomeTitle {
+    color: #ececec;
+    font-size: 20px;
+    font-weight: 600;
+}
+#welcomeIntro {
+    color: #a6a6a6;
+    font-size: 13px;
+}
+#welcomeHint {
+    color: #6f6f6f;
+    font-size: 11px;
+    letter-spacing: 1px;
+}
+#suggestionBtn {
+    background-color: #1a1a1a;
+    color: #ececec;
+    border: 1px solid #2b2b2b;
+    border-left: 3px solid #3a3a3a;
+    border-radius: 6px;
+    padding: 10px 14px;
+    text-align: left;
+}
+#suggestionBtn:hover {
+    background-color: #202020;
+    border-left: 3px solid #f0a500;
+}
+#checkCard {
+    background-color: #171717;
+    border: 1px solid #2b2b2b;
+    border-left: 3px solid #f0a500;
     border-radius: 8px;
-    padding: 8px;
+}
+
+/* ── Input bar ────────────────────────────────────────────── */
+#inputBar {
+    background-color: #121212;
+    border-top: 1px solid #2b2b2b;
+}
+QTextEdit {
+    background-color: #1a1a1a;
+    color: #ececec;
+    border: 1px solid #2b2b2b;
+    border-radius: 10px;
+    padding: 8px 10px;
     selection-background-color: #f0a500;
     selection-color: #000;
 }
-QTextEdit:focus {
-    border: 1px solid #f0a500;
-}
+QTextEdit:focus { border: 1px solid #5a4a20; }
 
 #sendBtn {
     background-color: #f0a500;
-    color: #000;
+    color: #111;
     border: none;
-    border-radius: 8px;
+    border-radius: 10px;
     font-size: 16px;
     font-weight: bold;
 }
-#sendBtn:hover {
-    background-color: #ffb700;
-}
-#sendBtn:disabled {
-    background-color: #333;
-    color: #555;
-}
+#sendBtn:hover { background-color: #ffb700; }
+#sendBtn:disabled { background-color: #2b2b2b; color: #6f6f6f; }
 
 #voiceBtn {
-    background-color: #1e1e1e;
-    color: #888;
-    border: 1px solid #333;
-    border-radius: 8px;
-    font-size: 18px;
+    background-color: #1a1a1a;
+    color: #a6a6a6;
+    border: 1px solid #2b2b2b;
+    border-radius: 10px;
+    font-size: 17px;
 }
-#voiceBtn:hover {
-    background-color: #252525;
-    color: #e8e8e8;
-}
+#voiceBtn:hover { color: #ececec; border-color: #3a3a3a; }
 #voiceBtn:checked {
-    background-color: #8b0000;
+    background-color: #5a0f0f;
     color: #fff;
-    border: 1px solid #cc0000;
+    border: 1px solid #a22;
 }
-#voiceBtn:disabled {
-    opacity: 0.4;
-}
+#voiceBtn:disabled { color: #444; border-color: #222; }
 
-/* ── Sidebar ──────────────────────────────────────────── */
+/* ── Sidebar ──────────────────────────────────────────────── */
 #sidebar {
-    background-color: #141414;
-    border-left: 1px solid #2a2a2a;
+    background-color: #151515;
+    border-left: 1px solid #2b2b2b;
 }
-
-#sidebarScroll {
-    background-color: transparent;
-    border: none;
-}
-
+#sidebarScroll { background-color: transparent; border: none; }
 #sectionHeader {
-    color: #f0a500;
+    color: #a6a6a6;
     font-size: 11px;
+    font-weight: 600;
     letter-spacing: 1px;
-    padding: 4px 0 2px 0;
-    text-transform: uppercase;
+    padding: 2px 0 2px 8px;
+    border-left: 3px solid #f0a500;
 }
-
 #infoRow {
     background-color: #1a1a1a;
     border-radius: 4px;
-    border: 1px solid #222;
+    border: 1px solid #242424;
 }
-
-#infoLabel {
-    color: #666;
-    font-size: 11px;
-}
-
-#infoValue {
-    color: #e8e8e8;
-    font-size: 12px;
-}
-
-#progressLabel {
-    color: #888;
-    font-size: 12px;
-    padding: 4px 8px;
-}
-
+#infoLabel { color: #6f6f6f; font-size: 11px; }
+#infoValue { color: #ececec; font-size: 12px; }
+#progressLabel { color: #a6a6a6; font-size: 12px; padding: 4px 8px; }
 #smallBtn {
-    background-color: #1e1e1e;
-    color: #888;
-    border: 1px solid #333;
-    border-radius: 4px;
-}
-#smallBtn:hover {
-    color: #f0a500;
-    border-color: #f0a500;
-}
-
-/* ── Dialogs ──────────────────────────────────────────── */
-QDialog {
     background-color: #1a1a1a;
-    color: #e8e8e8;
+    color: #a6a6a6;
+    border: 1px solid #2b2b2b;
+    border-radius: 4px;
+    padding: 0px;          /* small square buttons — global padding hid their text */
 }
+#smallBtn:hover { color: #ececec; border-color: #f0a500; }
+
+/* ── Dialogs and form controls ────────────────────────────── */
+QDialog { color: #ececec; }
 
 QTabWidget::pane {
-    border: 1px solid #2a2a2a;
-    background-color: #1a1a1a;
+    border: 1px solid #2b2b2b;
+    background-color: #151515;
+    border-radius: 6px;
 }
-
 QTabBar::tab {
-    background-color: #1e1e1e;
-    color: #888;
+    background-color: transparent;
+    color: #a6a6a6;
     padding: 8px 16px;
-    border: 1px solid #2a2a2a;
-    border-bottom: none;
+    border: none;
+    border-bottom: 2px solid transparent;
 }
-
+QTabBar::tab:hover { color: #ececec; }
 QTabBar::tab:selected {
-    background-color: #1a1a1a;
-    color: #f0a500;
-    border-top: 2px solid #f0a500;
+    color: #ececec;
+    border-bottom: 2px solid #f0a500;
 }
 
 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
-    background-color: #1e1e1e;
-    color: #e8e8e8;
-    border: 1px solid #333;
+    background-color: #1a1a1a;
+    color: #ececec;
+    border: 1px solid #2b2b2b;
     border-radius: 6px;
     padding: 6px 8px;
+    selection-background-color: #f0a500;
+    selection-color: #000;
 }
-QLineEdit:focus, QComboBox:focus {
-    border: 1px solid #f0a500;
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
+    border: 1px solid #5a4a20;
 }
-
-QComboBox::drop-down {
-    border: none;
-    width: 20px;
-}
-
-QCheckBox {
-    color: #e8e8e8;
-    spacing: 8px;
-}
-QCheckBox::indicator {
-    width: 16px;
-    height: 16px;
-    border: 1px solid #444;
-    border-radius: 3px;
+QComboBox::drop-down { border: none; width: 22px; }
+QComboBox QAbstractItemView {
     background-color: #1e1e1e;
+    color: #ececec;
+    border: 1px solid #3a3a3a;
+    selection-background-color: #2b2b2b;
+    selection-color: #ececec;
 }
-QCheckBox::indicator:checked {
-    background-color: #f0a500;
-    border-color: #f0a500;
+/* Plain number fields: type or scroll (styled arrow buttons drew no arrows) */
+QSpinBox::up-button, QSpinBox::down-button,
+QDoubleSpinBox::up-button, QDoubleSpinBox::down-button { width: 0px; border: none; }
+
+QCheckBox { color: #ececec; spacing: 8px; }
+QCheckBox::indicator {
+    width: 16px; height: 16px;
+    border: 1px solid #3a3a3a;
+    border-radius: 3px;
+    background-color: #1a1a1a;
 }
+QCheckBox::indicator:checked { background-color: #f0a500; border-color: #f0a500; }
 
 QPushButton {
-    background-color: #2a2a2a;
-    color: #ccc;
-    border: 1px solid #333;
+    background-color: #1e1e1e;
+    color: #ececec;
+    border: 1px solid #2b2b2b;
     border-radius: 6px;
     padding: 6px 16px;
 }
-QPushButton:hover {
-    background-color: #333;
-    color: #fff;
-}
+QPushButton:hover { background-color: #252525; border-color: #3a3a3a; }
+QPushButton:disabled { color: #555; }
 
-#primaryBtn {
+#primaryBtn, #beginBtn {
     background-color: #f0a500;
-    color: #000;
+    color: #111;
     border: none;
     font-weight: bold;
 }
-#primaryBtn:hover {
-    background-color: #ffb700;
+#primaryBtn:hover, #beginBtn:hover { background-color: #ffb700; }
+#beginBtn { border-radius: 8px; font-size: 14px; }
+
+#navBtn {
+    background-color: #1e1e1e;
+    color: #ececec;
+    border: 1px solid #2b2b2b;
+    border-radius: 6px;
+    padding: 6px 16px;
 }
+#navBtn:hover { border-color: #3a3a3a; background-color: #252525; }
+#navBtnSecondary {
+    background-color: transparent;
+    color: #a6a6a6;
+    border: none;
+    padding: 6px 16px;
+}
+#navBtnSecondary:hover { color: #ececec; }
+
+/* Destructive action — warning shown by the bar, not the text */
+#dangerBtn {
+    background-color: #1e1e1e;
+    color: #ececec;
+    border: 1px solid #2b2b2b;
+    border-left: 4px solid #d33;
+    border-radius: 6px;
+    padding: 6px 16px;
+}
+#dangerBtn:hover { background-color: #2a1a1a; }
 
 #noteLabel {
-    color: #666;
+    color: #a6a6a6;
     font-size: 11px;
-    padding: 8px;
-    background-color: #1e1e1e;
+    padding: 8px 10px;
+    background-color: #171717;
     border-radius: 6px;
-    border: 1px solid #2a2a2a;
+    border: 1px solid #2b2b2b;
 }
 
-/* ── Status Bar ───────────────────────────────────────── */
 QStatusBar {
-    background-color: #111;
-    color: #666;
+    background-color: #0e0e0e;
+    color: #a6a6a6;
     font-size: 11px;
-    border-top: 1px solid #222;
+    border-top: 1px solid #2b2b2b;
+}
+QStatusBar QLabel { color: #a6a6a6; padding: 0 8px; }
+QSplitter::handle { background-color: #2b2b2b; }
+
+QListWidget, QTableWidget {
+    background-color: #151515;
+    border: 1px solid #2b2b2b;
+    color: #ececec;
+    gridline-color: #242424;
+}
+QHeaderView::section {
+    background-color: #1a1a1a;
+    color: #a6a6a6;
+    border: none;
+    border-bottom: 1px solid #2b2b2b;
+    padding: 5px 8px;
+}
+QListWidget::item:selected, QTableWidget::item:selected {
+    background-color: #252525;
+    color: #ececec;
 }
 
-QSplitter::handle {
-    background-color: #2a2a2a;
-}
-
-/* ── Document Context ─────────────────────────────────────── */
+/* ── Documents ────────────────────────────────────────────── */
 #dropZone {
-    background-color: #1e1e1e;
-    border: 2px dashed #333;
+    background-color: #171717;
+    border: 2px dashed #3a3a3a;
     border-radius: 8px;
     margin: 8px 12px 0 12px;
 }
 #dropZoneActive {
-    background-color: #1a2a1a;
+    background-color: #1c1a14;
     border: 2px dashed #f0a500;
     border-radius: 8px;
     margin: 8px 12px 0 12px;
 }
-#dropZoneLabel {
-    color: #888;
-    font-size: 13px;
-}
+#dropZoneLabel { color: #a6a6a6; font-size: 13px; }
 #docList {
-    background-color: #1a1a1a;
-    border: 1px solid #2a2a2a;
-    color: #e8e8e8;
+    background-color: #151515;
+    border: 1px solid #2b2b2b;
+    color: #ececec;
     font-size: 12px;
     padding: 4px;
 }
-#docList::item {
-    padding: 6px 8px;
-    border-radius: 4px;
-}
+#docList::item { padding: 6px 8px; border-left: 3px solid transparent; }
 #docList::item:selected {
-    background-color: #2a3a2a;
-    color: #f0a500;
+    background-color: #202020;
+    color: #ececec;
+    border-left: 3px solid #f0a500;
 }
-#docList::item:hover {
-    background-color: #222;
-}
-#indexProgress {
-    background-color: #1a1a1a;
-    border: none;
-}
-#indexProgress::chunk {
-    background-color: #f0a500;
-}
-#assessmentWidget {
-    background-color: #1a1a1a;
-}
+#docList::item:hover { background-color: #1e1e1e; }
+#indexProgress { background-color: #1a1a1a; border: none; }
+#indexProgress::chunk { background-color: #f0a500; }
 
+/* ── Situation check (assessment) ─────────────────────────── */
+#assessmentWidget { background-color: #121212; }
 #assessmentHeader {
-    background-color: #111;
-    border-bottom: 1px solid #2a2a2a;
+    background-color: #0e0e0e;
+    border-bottom: 1px solid #2b2b2b;
 }
-
 #assessmentTitle {
-    color: #f0a500;
+    color: #ececec;
     letter-spacing: 1px;
+    border-left: 3px solid #f0a500;
+    padding-left: 10px;
 }
-
-#assessmentProgress {
-    color: #666;
-    font-size: 12px;
-}
-
-#assessmentScroll, #assessmentNav {
-    background-color: #1a1a1a;
-    border: none;
-}
-
-#assessmentNav {
-    border-top: 1px solid #2a2a2a;
-}
-
-#progressBarBg {
-    background-color: #222;
-}
-
-#progressBarFill {
-    background-color: #f0a500;
-}
-
-#questionText {
-    color: #e8e8e8;
-}
-
-#questionSubtitle {
-    color: #888;
-    font-size: 12px;
-}
-
+#assessmentProgress { color: #6f6f6f; font-size: 12px; }
+#assessmentScroll, #assessmentNav { background-color: #121212; border: none; }
+#assessmentNav { border-top: 1px solid #2b2b2b; }
+#progressBarBg { background-color: #222; }
+#progressBarFill { background-color: #f0a500; }
+#questionText { color: #ececec; }
+#questionSubtitle { color: #a6a6a6; font-size: 12px; }
 #optionBtn {
-    background-color: #1e1e1e;
-    color: #e8e8e8;
-    border: 1px solid #333;
+    background-color: #1a1a1a;
+    color: #ececec;
+    border: 1px solid #2b2b2b;
+    border-left: 3px solid #2b2b2b;
     border-radius: 8px;
     padding: 8px 16px;
     text-align: left;
     font-size: 13px;
 }
 #optionBtn:hover {
-    background-color: #252525;
-    border-color: #f0a500;
-    color: #f0a500;
+    background-color: #202020;
+    border-left: 3px solid #f0a500;
 }
-
-#navBtn {
-    background-color: #2a2a2a;
-    color: #ccc;
-    border: 1px solid #333;
-    border-radius: 6px;
-    padding: 6px 16px;
-}
-#navBtnSecondary {
-    background-color: transparent;
-    color: #666;
-    border: none;
-    padding: 6px 16px;
-}
-#navBtnSecondary:hover {
-    color: #999;
-}
-
-#resultsTitle {
-    color: #e8e8e8;
-}
-
-#resultsSubtitle {
-    color: #888;
-    font-size: 12px;
-}
-
+#resultsTitle { color: #ececec; }
+#resultsSubtitle { color: #a6a6a6; font-size: 12px; }
 #priorityCard {
-    background-color: #1e1e1e;
-    border: 1px solid #2a2a2a;
+    background-color: #1a1a1a;
+    border: 1px solid #2b2b2b;
+    border-left: 3px solid #f0a500;
     border-radius: 8px;
 }
-#priorityCard:hover {
-    border-color: #f0a500;
-    background-color: #222;
-}
-
+#priorityCard:hover { background-color: #202020; }
+/* Number shown plainly — no filled circle */
 #priorityNum {
-    background-color: #f0a500;
-    color: #000;
-    border-radius: 16px;
+    background: transparent;
+    color: #a6a6a6;
     font-weight: bold;
-    font-size: 13px;
+    font-size: 15px;
 }
+#priorityTitle { color: #ececec; }
+#priorityDetail { color: #a6a6a6; }
+#priorityArrow { color: #6f6f6f; }
 
-#priorityTitle {
-    color: #e8e8e8;
-}
-
-#priorityDetail {
-    color: #888;
-}
-
-#priorityArrow {
-    color: #f0a500;
-}
-
-#beginBtn {
-    background-color: #f0a500;
-    color: #000;
-    border: none;
+/* ── Skill tree ───────────────────────────────────────────── */
+#stageCard {
+    background-color: #151515;
+    border: 1px solid #2b2b2b;
     border-radius: 8px;
-    font-weight: bold;
-    font-size: 14px;
 }
-#beginBtn:hover {
-    background-color: #ffb700;
+#stageTitle {
+    color: #ececec;
+    font-weight: 600;
+    padding-left: 8px;
 }
-
-/* ── Skill Tree ───────────────────────────────────────────── */
+#stageCount { color: #a6a6a6; font-size: 12px; }
 #skillCard, #skillCardDone, #skillCardLocked {
-    background-color: #1e1e1e;
-    border: 1px solid #2a2a2a;
+    background-color: #1a1a1a;
+    border: 1px solid #242424;
     border-radius: 4px;
 }
-#skillCardDone {
-    background-color: #1a2a1a;
-    border-color: #2a4a2a;
-}
-#skillCardLocked {
-    opacity: 0.5;
-}
-#skillName {
-    color: #e8e8e8;
-    font-size: 12px;
-}
-#skillNameLocked {
-    color: #555;
-    font-size: 12px;
-}
-#skillTab {
-    color: #666;
-    font-size: 10px;
-}
+#skillCardDone { border-left: 3px solid #3c8c4c; }
+#skillName { color: #ececec; font-size: 12px; }
+#skillNameLocked { color: #6f6f6f; font-size: 12px; }
+#skillTab { color: #6f6f6f; font-size: 10px; }
 
-/* ── v22: speak-start timing stamp under each reply ── */
-#timingStamp {
-    color: #666;
-    font-size: 10px;
-    padding: 0px 0px 2px 0px;
+/* ── Quick access ─────────────────────────────────────────── */
+#quickBtn {
+    background-color: #1a1a1a;
+    border: 1px solid #2b2b2b;
+    border-radius: 8px;
 }
+#quickBtn:hover { background-color: #202020; border-color: #3a3a3a; }
+#quickLabel { color: #ececec; font-size: 13px; font-weight: 600; }
 
-/* ── v22: verdict row under a Training Path derivation ── */
+/* ── Training Path verdict row ────────────────────────────── */
 #verdictBar {
     background: transparent;
-    border-left: 3px solid #e8a020;
+    border-left: 3px solid #f0a500;
     margin-left: 32px;
 }
 
-/* ── Dev panel trace rows: colour lives in the left bar, never the text ── */
+/* ── Dev panel trace rows ─────────────────────────────────── */
 #traceRow {
-    background-color: #1c1c1c;
-    border: 1px solid #2a2a2a;
+    background-color: #1a1a1a;
+    border: 1px solid #2b2b2b;
     border-left: 4px solid #555;
     border-radius: 4px;
 }
-#traceRow QLabel {
-    color: #ccc;
-    font-size: 11px;
-}
-#traceMeta {
-    color: #888;
-}
+#traceRow QLabel { color: #ececec; font-size: 11px; }
+#traceMeta { color: #a6a6a6; }
 
-/* Full reset button — warning shown by its border, not its text */
-#dangerBtn {
-    background-color: #2a2a2a;
-    color: #ccc;
-    border: 1px solid #333;
-    border-left: 4px solid #ff4444;
-    border-radius: 6px;
-    padding: 6px 16px;
+/* ── Messages (local network) ─────────────────────────────── */
+#alertMessage {
+    background-color: #1e1414;
+    border: 1px solid #3a2222;
+    border-left: 4px solid #d33;
+    border-radius: 8px;
 }

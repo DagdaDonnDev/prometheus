@@ -88,7 +88,7 @@ class Sidebar(QWidget):
 
         # Day counter buttons
         day_btns = QHBoxLayout()
-        day_btn_minus = QPushButton("−")
+        day_btn_minus = QPushButton("-")
         day_btn_minus.setFixedSize(28, 28)
         day_btn_minus.setObjectName("smallBtn")
         day_btn_minus.clicked.connect(self._day_minus)
@@ -96,7 +96,7 @@ class Sidebar(QWidget):
         self._day_label = QLabel("Day 1")
         self._day_label.setAlignment(Qt.AlignCenter)
 
-        day_btn_plus = QPushButton("＋")
+        day_btn_plus = QPushButton("+")
         day_btn_plus.setFixedSize(28, 28)
         day_btn_plus.setObjectName("smallBtn")
         day_btn_plus.clicked.connect(self._day_plus)

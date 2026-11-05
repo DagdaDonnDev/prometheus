@@ -133,7 +133,10 @@ class VoiceManager:
         if not text.strip():
             return False
 
-        cmd = ["piper", "--model", str(voice.model)]
+        piper = self.find_piper()
+        if not piper:
+            return False
+        cmd = [piper, "--model", str(voice.model)]
 
         if voice.config.exists():
             cmd += ["--config", str(voice.config)]
@@ -158,22 +161,57 @@ class VoiceManager:
         except subprocess.TimeoutExpired:
             return False
 
+    def find_piper(self) -> Optional[str]:
+        """
+        Locate the Piper program (cached after the first look).
+
+        Step 1: PROMETHEUS_PIPER environment variable, if set
+        Step 2: piper on PATH
+        Step 3: a piper/ folder in the project
+        Step 4: anywhere under prometheus_setup/ (inside or next to the project)
+
+        Only the release program counts (piper.exe on Windows) — the Piper
+        source code (piper-master) can't speak on its own.
+        """
+        if getattr(self, "_piper_cache", None) is not None:
+            return self._piper_cache or None
+
+        import os
+        import shutil
+        import sys
+        from core.paths import PROJECT_DIR, setup_dir
+
+        exe = "piper.exe" if sys.platform == "win32" else "piper"
+        found = ""
+
+        env = os.environ.get("PROMETHEUS_PIPER", "")
+        if env and Path(env).is_file():
+            found = env
+        if not found:
+            found = shutil.which("piper") or ""
+        if not found:
+            for base in (PROJECT_DIR / "piper", setup_dir()):
+                if not base.is_dir():
+                    continue
+                for cand in sorted(base.rglob(exe)):
+                    if cand.is_file() and (sys.platform == "win32" or os.access(cand, os.X_OK)):
+                        found = str(cand)
+                        break
+                if found:
+                    break
+
+        self._piper_cache = found
+        return found or None
+
     def piper_available(self) -> bool:
-        """Check if piper binary is on PATH."""
-        try:
-            result = subprocess.run(
-                ["piper", "--version"],
-                capture_output=True,
-                timeout=3,
-            )
-            return result.returncode == 0
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            return False
+        """True if the Piper program was found."""
+        return self.find_piper() is not None
 
     def status_summary(self) -> str:
         """Human-readable status for settings/status bar."""
         if not self.piper_available():
-            return "Piper not found — install from github.com/rhasspy/piper"
+            return ("Piper not found — download the release for your system from "
+                    "github.com/rhasspy/piper/releases and unzip it into prometheus_setup/")
         if not self._voices:
             return "No voices found — add folders to voices/"
         names = ", ".join(self.names())

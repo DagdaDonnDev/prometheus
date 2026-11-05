@@ -51,6 +51,31 @@ Decision layers live in `core/pipeline.py` (`QueryPipeline`, no Qt). The window 
   and to exclude memory/. Can't be built in the cloud sandbox (download.qt.io and NDK blocked).
 - Deliver as a commit plus a zip of changed files; the owner pushes.
 
+## Owner's local layout (Windows, listed 2026-11-05)
+```
+<parent>/
+├── prometheus/            the repo (main.py, core/, ui/, knowledge_base/, voices/Data, voices/Vasco, memory/, map/ empty)
+└── prometheus_setup/      NEXT TO the repo, not inside: wiki dumps, a duplicate knowledge_base/ copy,
+                           piper-master (Piper SOURCE, not a program), piper-voice-models-main
+```
+- Use `core/paths.setup_dir()` for prometheus_setup (inside first, then beside). Never assume one.
+- TTS: `VoiceManager.find_piper()` searches PROMETHEUS_PIPER → PATH → project/piper → setup_dir().
+  Playback: `winsound` on Windows (polled so stop works), aplay/paplay/afplay elsewhere;
+  `stop()` bumps a generation counter and terminates only our own player process.
+
+## UI (overhauled 2026-11-05)
+- `ui/style.qss` is the single source of look: neutral text, colour only in bars/borders/fills,
+  `QLabel { background: transparent }` (a global QWidget background used to paint black boxes behind
+  labels). Small square buttons need `padding: 0` or the global padding hides their text.
+- Header: PROMETHEUS + day; Situation check, Skills, Map, Info (checkable), Settings, More ▾ menu
+  (documents, print, reset, developer panel). Phone: first three move into More.
+- Companion tab is first and the default. No first-launch popup: empty tabs show `ui/welcome.py`
+  (intro + suggestions); only Survival offers the situation check, until `user.assessment_done`.
+- Sidebar starts hidden until memory has something (`_has_situation_data`).
+- Ollama: `OllamaCheckWorker` (QThread) — never check on the UI thread; retries every 10 s;
+  `is_available()` falls back from localhost to 127.0.0.1. Settings → Model edits `fast_model` and
+  `companion_model` (chats use these; `llm_model` mirrors fast_model; old configs migrate in `Config.load`).
+
 ## Repo hygiene
 - `.gitattributes` keeps `setup.bat` CRLF and `setup.sh` LF; `setup.sh` is committed executable.
 

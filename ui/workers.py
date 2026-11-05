@@ -73,6 +73,26 @@ class TrainingWorker(QThread):
             self.fallback_requested.emit(result)
 
 
+class OllamaCheckWorker(QThread):
+    """
+    Checks Ollama off the UI thread (each try can wait several seconds).
+    Emits a dict: {"reachable": bool, "error": str, "missing": [model, …]}
+    """
+    checked = Signal(dict)
+
+    def __init__(self, llm: LLMEngine):
+        super().__init__()
+        self.llm = llm
+
+    def run(self):
+        reachable = self.llm.is_available()
+        self.checked.emit({
+            "reachable": reachable,
+            "error": getattr(self.llm, "last_error", ""),
+            "missing": self.llm.missing_models() if reachable else [],
+        })
+
+
 class InitWorker(QThread):
     """Initializes heavy components (RAG, STT) in background."""
     status_update = Signal(str)

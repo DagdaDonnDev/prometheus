@@ -678,7 +678,8 @@ def create_sample_knowledge_base():
 WIKI_BASE_URL  = "https://dumps.wikimedia.org/simplewiki/latest/"
 WIKI_DUMP_NAME = "simplewiki-latest-pages-articles.xml.bz2"
 WIKI_SUMS_NAME = "simplewiki-latest-sha1sums.txt"
-WIKI_DOWNLOAD_DIR = Path("prometheus_setup")
+from core.paths import setup_dir
+WIKI_DOWNLOAD_DIR = setup_dir()   # prometheus_setup/, inside or next to the project
 # Wikimedia asks automated clients for a descriptive User-Agent
 WIKI_USER_AGENT = "Prometheus-offline-knowledge-ingest/1.0 (+https://github.com/DagdaDonnDev/prometheus)"
 

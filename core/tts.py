@@ -8,6 +8,9 @@ Fully offline.
 
 import os
 import re
+import sys
+import time
+import wave
 import queue
 import tempfile
 import threading
@@ -33,6 +36,9 @@ class TTSEngine:
         self._stop_event   = threading.Event()
         self._worker_thread: Optional[threading.Thread] = None
         self._token_buffer = ""
+        # Bumped by stop(): queued or playing speech from before is dropped
+        self._generation   = 0
+        self._player: Optional[subprocess.Popen] = None
 
         self.available = self.voice_manager.piper_available()
 
@@ -63,15 +69,17 @@ class TTSEngine:
     def _worker_loop(self):
         while not self._stop_event.is_set():
             try:
-                text = self._speak_queue.get(timeout=0.5)
-                if text is None:
+                item = self._speak_queue.get(timeout=0.5)
+                if item is None:
                     break
-                self._speak(text)
+                gen, text = item
+                if gen == self._generation:      # skip speech queued before a stop
+                    self._speak(text, gen)
                 self._speak_queue.task_done()
             except queue.Empty:
                 continue
 
-    def _speak(self, text: str):
+    def _speak(self, text: str, gen: int):
         if not text.strip() or not self._active_voice:
             return
 
@@ -87,8 +95,9 @@ class TTSEngine:
                 rate=self.config.tts_rate,
             )
 
-            if success and os.path.exists(tmp):
-                self._play(tmp)
+            # Stopped while Piper was working? Don't play the stale sentence
+            if success and os.path.exists(tmp) and gen == self._generation:
+                self._play(tmp, gen)
 
         except Exception:
             pass
@@ -99,19 +108,46 @@ class TTSEngine:
                 except Exception:
                     pass
 
-    def _play(self, path: str):
+    def _play(self, path: str, gen: int):
+        """Play a wav file, returning early if stop() is called."""
+        if sys.platform == "win32":
+            self._play_windows(path, gen)
+            return
+
+        # Linux / macOS: first player that exists
         for player in ["aplay", "paplay", "afplay", "mpg123"]:
             try:
-                subprocess.run(
+                self._player = subprocess.Popen(
                     [player, path],
-                    capture_output=True,
-                    timeout=60,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 )
-                return
             except FileNotFoundError:
                 continue
             except Exception:
                 return
+            try:
+                self._player.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                self._player.kill()
+            finally:
+                self._player = None
+            return
+
+    def _play_windows(self, path: str, gen: int):
+        """Windows has no aplay — use the built-in winsound, polled so stop() works."""
+        import winsound
+        try:
+            with wave.open(path, "rb") as w:
+                seconds = w.getnframes() / float(w.getframerate() or 1)
+        except Exception:
+            seconds = 10.0
+        winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+        end = time.time() + seconds + 0.1
+        while time.time() < end:
+            if gen != self._generation:
+                winsound.PlaySound(None, 0)      # stop the current sound
+                return
+            time.sleep(0.05)
 
     # ── Token streaming interface ──────────────────────────────────────────
 
@@ -126,12 +162,12 @@ class TTSEngine:
             text = self._token_buffer.strip()
             self._token_buffer = ""
             if text:
-                self._speak_queue.put(text)
+                self._speak_queue.put((self._generation, text))
 
     def flush(self):
         """Speak any remaining buffered text."""
         if self._token_buffer.strip():
-            self._speak_queue.put(self._token_buffer.strip())
+            self._speak_queue.put((self._generation, self._token_buffer.strip()))
             self._token_buffer = ""
 
     def _should_speak(self, buffer: str) -> bool:
@@ -202,11 +238,16 @@ class TTSEngine:
             except queue.Empty:
                 break
         self._token_buffer = ""
-        try:
-            subprocess.run(["pkill", "-f", "aplay"], capture_output=True)
-            subprocess.run(["pkill", "-f", "afplay"], capture_output=True)
-        except Exception:
-            pass
+        # Drop anything queued or being synthesised, and cut the current sound.
+        # Only Prometheus's own player is stopped (pkill used to stop every
+        # aplay on the machine).
+        self._generation += 1
+        player = self._player
+        if player and player.poll() is None:
+            try:
+                player.terminate()
+            except Exception:
+                pass
 
     def set_enabled(self, enabled: bool):
         self.enabled = enabled

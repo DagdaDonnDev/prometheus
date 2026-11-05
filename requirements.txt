@@ -26,4 +26,3 @@ lxml>=4.9.0
 
 # Utilities
 numpy>=1.24.0
-pathlib2>=2.3.7

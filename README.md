@@ -59,7 +59,7 @@ ollama pull llama3.2:3b
 
 ### 3. Install Python dependencies
 ```bash
-pip install -r requirements.txt
+python -m pip install -r requirements.txt   # "python -m" installs into the Python that runs Prometheus
 ```
 
 ### 4. Download all source materials (one time, needs internet)
@@ -92,15 +92,26 @@ python main.py
 Voice changes the experience from tool to companion.
 
 ### Text-to-Speech (Piper)
-```bash
-# Download Piper binary for your platform:
-# https://github.com/rhasspy/piper/releases
+1. **Get the Piper program**, not the source code. From
+   https://github.com/rhasspy/piper/releases download the release for your
+   system (Windows: `piper_windows_amd64.zip`) and unzip it anywhere inside
+   `prometheus_setup/`. That folder can sit inside the project or next to it.
+   Prometheus finds `piper.exe` (or `piper`) there, on your PATH, or at the
+   path in the `PROMETHEUS_PIPER` environment variable. Keep the unzipped
+   folder together: Piper needs its `espeak-ng-data` folder beside it.
+   A "Download ZIP" of the Piper GitHub page (`piper-master`) is the source
+   code and can't speak.
+2. **Add voices**, one folder per voice, each with the model and its config:
+   ```
+   voices/
+   ├── Vasco/   en_GB-…-medium.onnx  +  en_GB-…-medium.onnx.json
+   └── Data/    en_US-…-medium.onnx  +  en_US-…-medium.onnx.json
+   ```
+   The folder name is the voice name shown in ⚙ Settings. Voices:
+   https://huggingface.co/rhasspy/piper-voices
 
-# Download voice model (recommended: en_US-amy-medium):
-# https://huggingface.co/rhasspy/piper-voices
-
-# Place .onnx and .json voice files in the voices/ directory
-```
+Playback uses Windows' built-in sound on Windows, and `aplay`/`paplay`
+(Linux) or `afplay` (macOS) elsewhere. Escape / ⏹ cuts speech immediately.
 
 ### Speech-to-Text (Faster-Whisper)
 ```bash
@@ -154,7 +165,7 @@ The APK includes the knowledge base text and the stylesheet. It never includes
 `memory/`, so your conversations and personal documents stay off the build.
 
 **On the phone:** run Ollama on a laptop or Pi on the same WiFi and set
-⚙ Settings → Ollama URL (e.g. `http://192.168.1.100:11434`). Start Ollama
+Settings → Model → Ollama address (e.g. `http://192.168.1.100:11434`). Start Ollama
 with `OLLAMA_HOST=0.0.0.0 ollama serve` so the phone can reach it.
 Voice (Piper, Faster-Whisper) is desktop-only for now.
 
@@ -321,17 +332,34 @@ first words arrive. Each reply shows a small stamp, e.g. `↳ 🔊 420ms  ✓ 18
 | Escape or ⏹ | Stop the current answer immediately |
 | Ctrl+D | Dev Panel |
 
-### Header Controls
+### Getting around
+Prometheus opens in the **Prometheus** (companion) tab with the cursor in the
+message box, so you can just start typing. There's no popup on first launch.
+
+Every empty tab shows what it's for and a few questions you can tap. The
+Survival tab also offers the optional 5-question **Situation check**.
+
 | Control | Function |
 |---------|---------|
-| **⚡** (tab bar, leftmost) | Quick Access — 16 one-tap critical actions |
-| **📋 Assess** | Situation assessment → immediate priority list |
-| **🌱 Skills** | Civilisation rebuild skill tree (55 skills, 8 stages) |
-| **◀ Info** | Toggle situation sidebar |
-| **📎** | Add personal documents as searchable context |
-| **🖨️** | Generate printable 6-page emergency reference PDF |
-| **⚙** | Settings (model, voice, identity) |
-| **↺** | Reset — clear one tab, all tabs, user memory, or everything (backup saved first) |
+| **Quick help** (tab bar, left) | 16 one-tap questions for urgent situations |
+| **Situation check** | 5 questions → a numbered priority list |
+| **Skills** | Civilisation rebuild tracker (55 skills, 8 stages) |
+| **Map** | Offline world map (run `bootstrap_map.py` for map data) |
+| **Info** | Show or hide your situation panel. It starts hidden until there's something in it |
+| **Settings** | Name, model, voice |
+| **More ▾** | Personal documents · Print emergency reference · Reset · Developer panel (Ctrl+D) |
+
+On a phone, Situation check, Skills and Map move into **More ▾**.
+
+### Choosing the model
+Settings → Model has one box for the knowledge tabs and one for the companion
+tab. Each lists the models installed in Ollama, and you can type any other name
+(pull it first with `ollama pull <name>`). **Check Ollama** tests the address
+you've typed. Changes apply as soon as you save; no restart needed.
+
+If Ollama isn't reachable, the status bar says so in plain words and checks
+again every 10 seconds, so starting Ollama after Prometheus is fine. If a model
+isn't installed, it shows the exact `ollama pull` command to run.
 
 ### Quick Access Panel
 16 pre-wired critical actions across 4 sections. Tap any button — it navigates
@@ -342,8 +370,9 @@ to the correct tab and fires the query automatically. No typing needed.
 - **Navigation:** Find North, Where Am I, Signal, Weather
 - **Build & Resources:** Power, Tools, Soap, Ferment
 
-### Situation Assessment
-5 questions on first launch (or via 📋 Assess any time):
+### Situation Check
+5 questions, whenever you want them (header → Situation check, or the card in
+an empty Survival tab):
 surroundings → temperature → injury → companions → supplies.
 Generates a numbered, prioritised action list specific to your exact situation.
 Tapping any priority opens the relevant tab.
@@ -386,7 +415,7 @@ curl -fsSL https://ollama.ai/install.sh | sh
 ollama pull llama3.2:3b
 
 # Install Python dependencies
-pip install -r requirements.txt --break-system-packages
+python3 -m pip install -r requirements.txt --break-system-packages
 
 # Auto-start on boot — add to /etc/rc.local before exit 0:
 # ollama serve &

@@ -20,6 +20,9 @@ class TabButton(QPushButton):
         self.setCheckable(True)
         self.setFixedHeight(36)
         self.setMinimumWidth(90)
+        # Never squeeze below the text's width — on narrow screens the row scrolls
+        from PySide6.QtWidgets import QSizePolicy
+        self.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
 
     def set_active(self, active: bool):
         self.setChecked(active)
@@ -47,10 +50,10 @@ class TabBar(QWidget):
         layout.setSpacing(4)
 
         # Quick access button (leftmost, always visible)
-        quick_btn = QPushButton("⚡")
+        quick_btn = QPushButton("Quick help")
         quick_btn.setObjectName("quickAccessBtn")
-        quick_btn.setFixedSize(36, 36)
-        quick_btn.setToolTip("Quick Access")
+        quick_btn.setFixedHeight(32)
+        quick_btn.setToolTip("16 one-tap questions for urgent situations")
         quick_btn.clicked.connect(self.quick_access_requested)
         layout.addWidget(quick_btn)
 
@@ -79,7 +82,7 @@ class TabBar(QWidget):
         layout.addWidget(scroll)
 
         # Add tab button
-        add_btn = QPushButton("＋")
+        add_btn = QPushButton("+")
         add_btn.setObjectName("addTabBtn")
         add_btn.setFixedSize(36, 36)
         add_btn.setToolTip("New tab")

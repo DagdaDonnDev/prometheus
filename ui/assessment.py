@@ -566,6 +566,7 @@ class AssessmentWidget(QWidget):
             self.memory.set_alert("medical_condition", f"Injury reported: {injury}")
 
         self.memory.add_moment("Situation assessment completed")
+        self.memory.data["user"]["assessment_done"] = True   # stop offering it
         self.memory.save()
 
     def _clear_content(self):
