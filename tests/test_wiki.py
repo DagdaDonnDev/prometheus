@@ -1,0 +1,90 @@
+"""
+Wikipedia title lookup and search — no Qt, no Ollama.
+Run from the project root:  python -m unittest discover tests
+"""
+
+import tempfile
+import unittest
+from pathlib import Path
+
+import core.wiki_lookup as w
+
+
+ARTICLES = {
+    "Inception": "Inception may refer to: a film, a beginning.",
+    "Inception_film": "Inception is a 2010 science fiction film directed by Christopher Nolan.",
+    "The_Matrix": "The Matrix is a 1999 science fiction action film.",
+    "Yesterday": "Yesterday is the day before today.",
+    "Yesterday_song": "Yesterday is a song by the Beatles.",
+    "Breaking_Bad": "Breaking Bad is an American crime drama television series.",
+    "Movie": "A movie is a film.",
+}
+
+
+class TestWiki(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.old = w.WIKI_DIR
+        w.WIKI_DIR = Path(self.tmp.name)
+        w._cache.update({"mtime": None, "titles": {}})
+        for stem, body in ARTICLES.items():
+            title = stem.replace("_film", " (film)").replace("_song", " (song)").replace("_", " ")
+            (w.WIKI_DIR / f"{stem}.txt").write_text(f"# {title}\n\n{body}", encoding="utf-8")
+
+    def tearDown(self):
+        w.WIKI_DIR = self.old
+        w._cache.update({"mtime": None, "titles": {}})
+        self.tmp.cleanup()
+
+    def titles(self, text):
+        return [t for t, _ in w.find_articles(text)]
+
+    def test_finds_named_things(self):
+        self.assertEqual(self.titles("have you seen inception?"), ["Inception (film)"])   # lower case, after "seen"
+        self.assertEqual(self.titles("what did you think of the matrix"), ["The Matrix"])
+        self.assertEqual(self.titles("breaking bad is so good"), ["Breaking Bad"])
+        self.assertEqual(self.titles("i love the song Yesterday"), ["Yesterday (song)"])
+
+    def test_skips_everyday_words(self):
+        self.assertEqual(self.titles("I watched a movie yesterday"), [])
+        self.assertEqual(self.titles("hey how's it going"), [])
+
+    def test_disambiguation_prefers_the_real_article(self):
+        self.assertEqual(self.titles("Have you seen Inception"), ["Inception (film)"])
+
+    def test_search_ranks_titles(self):
+        r = [x["title"] for x in w.search("inception")]
+        self.assertEqual(r[:2], ["Inception", "Inception (film)"])
+        self.assertEqual(w.search("xyzzy"), [])
+        self.assertIn("Breaking Bad", [x["title"] for x in w.search("breaking")])
+
+    def test_lead(self):
+        p = w.WIKI_DIR / "Inception_film.txt"
+        self.assertTrue(w.lead(p, 5).startswith("Inception is a 2010"))
+        self.assertNotIn("# ", w.lead(p, 50))
+
+    def test_full_text_finds_words_inside_articles(self):
+        from core import wiki_index
+        idx = w.WIKI_DIR.parent / "wikipedia_search.sqlite"
+        self.assertEqual(wiki_index.build_index(w.WIKI_DIR, idx, progress=lambda m: None), len(ARTICLES))
+        try:
+            self.assertTrue(w.full_text_ready())
+            r = w.search("christopher nolan")            # only in Inception (film)'s text
+            self.assertEqual(r[0]["title"], "Inception (film)")
+            self.assertIn("Nolan", r[0]["snippet"])
+            self.assertEqual(w.search("beatles")[0]["title"], "Yesterday (song)")
+            self.assertEqual(w.search("incep")[0]["title"], "Inception")   # title prefix stays on top
+            self.assertEqual(w.search("qqqzzz"), [])
+            self.assertEqual(wiki_index.search('"; DROP TABLE articles; --', index_path=idx), [])  # safe
+        finally:
+            idx.unlink()
+
+    def test_no_folder(self):
+        w.WIKI_DIR = Path(self.tmp.name) / "missing"
+        w._cache.update({"mtime": None, "titles": {}})
+        self.assertEqual(w.find_articles("have you seen inception"), [])
+        self.assertEqual(w.search("inception"), [])
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -272,13 +272,10 @@ class IndexWorker(QThread):
         return chunks
 
     def _index_to_chroma(self, chunks: List[Dict]):
-        from sentence_transformers import SentenceTransformer
+        from core.embedder import get_embedder
         import chromadb
 
-        embedder = SentenceTransformer(
-            "all-MiniLM-L6-v2",
-            cache_folder="memory/model_cache"
-        )
+        embedder = get_embedder()   # shared — no new copy per document
         client = chromadb.PersistentClient(path=str(PERSONAL_DB_PATH))
         collection = client.get_or_create_collection(
             "prometheus_personal",
@@ -316,13 +313,10 @@ class PersonalDocSearcher:
 
     def initialize(self):
         try:
-            from sentence_transformers import SentenceTransformer
+            from core.embedder import get_embedder
             import chromadb
 
-            self._embedder = SentenceTransformer(
-                "all-MiniLM-L6-v2",
-                cache_folder="memory/model_cache"
-            )
+            self._embedder = get_embedder()   # shared with the library
             client = chromadb.PersistentClient(path=str(PERSONAL_DB_PATH))
             self._collection = client.get_or_create_collection("prometheus_personal")
             self._ready = True

@@ -294,7 +294,28 @@ def print_recent(n: int = 10):
         print(f"  {when}  {t.tab_id:<11} {t.path:<9} {t.gate_mode or '-':<9} "
               f"model={t.llm_model or '-'}  🔊 {t.first_token_ms} ms  ✓ {t.response_ms} ms")
         print(f"            {t.breakdown()}")
+        if t.training_status:
+            print(f"            training path: {t.training_status} ({t.training_concept or 'no concept'})")
         print(f"            \"{t.query_preview}\"")
+
+    # Why the Training Path's last attempts didn't verify (one line per method)
+    hist_path = Path("memory/training/history.json")
+    if hist_path.exists():
+        try:
+            history = json.loads(hist_path.read_text(encoding="utf-8"))[-3:]
+        except Exception:
+            history = []
+        if history:
+            print()
+            print("Last Training Path attempts (what the self-check objected to):")
+            for h in history:
+                when = time.strftime("%H:%M:%S", time.localtime(h.get("time", 0)))
+                print(f"  {when}  {h.get('concept')}: {h.get('verified', 0)} of "
+                      f"{h.get('methods', 0)} methods verified")
+                for i, probs in enumerate(h.get("problems", []), 1):
+                    print(f"            method {i}: {', '.join(probs) or 'ok'}")
+                if h.get("raw"):
+                    print("            model output (start): " + h["raw"][:300].replace("\n", " | "))
 
 
 if __name__ == "__main__":

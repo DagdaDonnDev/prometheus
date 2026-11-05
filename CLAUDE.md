@@ -95,6 +95,29 @@ Decision layers live in `core/pipeline.py` (`QueryPipeline`, no Qt). The window 
 - Answers carry their own `images`/`sources` (PreparedAnswer) — never read `knowledge.get_last_*`
   after the fact (the companion path doesn't search, so those can be stale).
 
+## From the owner's debug logs (2026-11-05)
+- Windows: requests to `localhost` cost ~2 s each (IPv6 tried first, Ollama is IPv4-only).
+  `llm.fast_local_url()` / `LLMEngine.base_url` setter always use 127.0.0.1. Ollama's own time to
+  first token was ~0.3 s on the owner's GPU — everything else was this.
+- Settings probes Ollama on a QThread (never block the dialog).
+- One shared embedder (`core/embedder.get_embedder`); offline (HF_HUB_OFFLINE) once cached.
+- ingest re-does image-eligible PDFs whose processed entry lacks `"paged": True` (pictures + page_num).
+- Follow-ups (`pipeline.is_follow_up`) search with the previous question + FOLLOW_UP_NOTE.
+- `python -m core.tracer` also prints the last Training Path attempts (problems + raw output start).
+
+## Wikipedia
+- Owner hadn't extracted it (old parser found 0 articles anyway). `--extract-only` extracts without
+  the hours-long indexing; `core/wiki_lookup` reads the extracted files directly.
+- `find_articles(text)`: n-grams (1–6 words) → file stems, media-hint suffixes (_film, _tv_series…),
+  disambiguation → variant, single words only if Capitalised / quoted / after LEAD_IN ("seen", "about",
+  "what is"…), never generic MEDIA_HINTS words. ~0.1 ms with 100k titles (listing: ~0.5 s once, cached).
+- Used by `pipeline._wikipedia_background`: chat tab always; knowledge tabs only non-strict and not medical.
+- Full-text: `core/wiki_index` (SQLite FTS5, porter, title weight 10, last word prefix,
+  AND then OR fallback) → `knowledge_base/wikipedia_search.sqlite`. Built after every extraction and by
+  `ingest.py --wiki-index`. 50k articles: 3 s build, ~25–65 ms per search.
+- Wikipedia tab = tab 2 (`id="wikipedia"`, not a chat): `ui/wiki_search.py`, search on a QThread,
+  title ranking + vector matches when indexed; "Ask about this" → chat tab "Tell me about <title>".
+
 ## Repo hygiene
 - `.gitattributes` keeps `setup.bat` CRLF and `setup.sh` LF; `setup.sh` is committed executable.
 

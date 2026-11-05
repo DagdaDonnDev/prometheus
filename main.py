@@ -9,6 +9,10 @@ import os
 # Ensure we're running from project root
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
+# Offline app: if the search model is already downloaded, never ask Hugging Face
+from core.embedder import use_offline_cache_if_present
+use_offline_cache_if_present()
+
 # Step 1: check the packages the window needs before importing it, so a
 # missing install gives one clear instruction instead of a traceback
 _missing = []

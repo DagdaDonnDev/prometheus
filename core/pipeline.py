@@ -50,6 +50,32 @@ Someone has just told you they may want to die or hurt themselves. Nothing matte
 - Don't promise everything will be fine.
 """.strip()
 
+# Short follow-ups that ask about the previous answer ("why?", "yes but why")
+FOLLOW_UP_STARTS = (
+    "why", "how come", "how so", "what do you mean", "are you sure", "really",
+    "says who", "based on what", "source", "proof", "explain", "but why",
+    "yes but", "ok but", "okay but", "how do you know", "what makes",
+)
+FOLLOW_UP_NOTE = (
+    "FOLLOW-UP: they're asking about your previous answer. Explain the reasoning "
+    "behind it, using the sources above. If the sources don't support something "
+    "you said, say so plainly and correct it."
+)
+
+
+def previous_question(tab, current: str) -> str:
+    """The user's message before this one in the tab, or ""."""
+    users = [m["content"] for m in getattr(tab, "history", []) if m.get("role") == "user"]
+    if users and users[-1].strip() == current.strip():
+        users = users[:-1]          # the current message is already in history
+    return users[-1] if users else ""
+
+
+def is_follow_up(text: str) -> bool:
+    q = text.lower().strip(" ?!.")
+    return len(q.split()) <= 6 and (q.startswith(FOLLOW_UP_STARTS) or q in ("why", "how", "source"))
+
+
 # Training results that are shown to the user; anything else falls back
 TRAINING_SHOW_STATUSES = {"DERIVED", "NEEDS_DATA"}
 
@@ -126,9 +152,14 @@ class QueryPipeline:
         if tab.id == "prometheus" and routing_plan.intent != Intent.EMERGENCY:
             return self._prepare_companion(user_input, routing_plan, trace)
 
-        # Step 2: tiered retrieval
+        # Step 2: tiered retrieval. A short follow-up ("yes but why") has nothing
+        # to search for on its own — search with the previous question too, so
+        # the model keeps the sources behind the answer it's being asked about.
+        follow_up = is_follow_up(user_input) and bool(previous_question(tab, user_input))
+        search_q = (f"{previous_question(tab, user_input)} {user_input}"
+                    if follow_up else user_input)
         knowledge_context, confidence_note = self.knowledge.search(
-            query=user_input, routing_plan=routing_plan,
+            query=search_q, routing_plan=routing_plan,
         )
         scores = self.knowledge.get_last_scores()
         if trace:
@@ -197,13 +228,23 @@ class QueryPipeline:
         if map_context:
             context = context + "\n\n" + map_context
 
+        # Step 7b: a named thing with its own Wikipedia article (never for
+        # medical or strict questions — those stay on the field manuals)
+        wiki_sources = []
+        if not routing_plan.is_strict and tab.id != "medical":
+            wiki_text, wiki_sources = self._wikipedia_background(search_q, 100)
+            if wiki_text:
+                knowledge_context = (knowledge_context + "\n\n---\n\n" if knowledge_context else "") + \
+                    "[General reference — lower priority than the sources above]\n" + wiki_text
+
         # Step 8: system prompt (order matters — guidance last)
         system_prompt = self.llm.build_system_prompt(
             tab_system=self._tab_system(tab),
             user_context=context,
             knowledge_context=knowledge_context,
             confidence_note=confidence_note,
-            decision_addendum=plan.system_addendum,
+            decision_addendum=(plan.system_addendum + "\n\n" + FOLLOW_UP_NOTE
+                               if follow_up else plan.system_addendum),
             llm_bounds=bounds,
         )
         if trace:
@@ -224,7 +265,7 @@ class QueryPipeline:
             )
 
         images = list(getattr(self.knowledge, "get_last_images", lambda: [])() or [])
-        sources = list(getattr(self.knowledge, "get_last_sources", lambda: [])() or [])
+        sources = list(getattr(self.knowledge, "get_last_sources", lambda: [])() or []) + wiki_sources
 
         return PreparedAnswer(
             system_prompt=system_prompt,
@@ -275,6 +316,8 @@ class QueryPipeline:
         Step 2: their name, if known (nothing else from memory)
         Step 3: only for philosophy/psychology questions, two short
                 passages from the companion shelf as background
+        Step 4: if the message names something with a Wikipedia article
+                (a film, show, band, book, person), that article's opening
         """
         parts = [self.companion_personality()]
 
@@ -296,6 +339,11 @@ class QueryPipeline:
                 trace.retrieval.total_chunks = len(chunks)
                 trace.retrieval.has_sources = bool(chunks)
 
+        # Step 4
+        wiki_notes, sources = self._wikipedia_background(user_input)
+        if wiki_notes:
+            parts.append(wiki_notes)
+
         system_prompt = "\n\n".join(parts)
         if trace:
             trace.gate_mode = "direct"
@@ -306,7 +354,23 @@ class QueryPipeline:
             intent=routing_plan.intent.value,
             sufficiency="NONE",
             status_text="",
+            sources=sources,
         )
+
+    @staticmethod
+    def _wikipedia_background(user_input: str, words: int = 110):
+        """
+        Openings of the Wikipedia articles the message names (by title — a few
+        milliseconds, no search). Returns (prompt text, ["Wikipedia — Title"]).
+        """
+        from core.wiki_lookup import find_articles, lead
+        found = find_articles(user_input, max_articles=2)
+        if not found:
+            return "", []
+        notes = [f"{title}: {lead(path, words)}" for title, path in found]
+        text = ("What Wikipedia says (use it for facts; talk about it in your own words):\n"
+                + "\n\n".join(notes))
+        return text, [f"Wikipedia — {title}" for title, _ in found]
 
     def _map_context(self) -> str:
         if not self.map_engine:

@@ -27,6 +27,18 @@ INTENT_TEMPERATURE = {
 DEFAULT_TEMPERATURE = 0.65
 
 
+def fast_local_url(url: str) -> str:
+    """
+    "localhost" → "127.0.0.1".
+
+    On Windows, Python tries localhost's IPv6 address (::1) first, but
+    Ollama only listens on IPv4 — Windows then waits about 2 seconds
+    before falling back. That was added to EVERY request (the ~2.4 s
+    wait before each reply, and the slow Settings window).
+    """
+    return (url or "http://localhost:11434").rstrip("/").replace("://localhost", "://127.0.0.1")
+
+
 class LLMEngine:
     def __init__(self, config):
         self.config = config
@@ -57,12 +69,19 @@ class LLMEngine:
                 self.last_error = str(e)
         return False
 
+    @property
+    def base_url(self) -> str:
+        return self._base_url
+
+    @base_url.setter
+    def base_url(self, url: str):
+        self._base_url = fast_local_url(url)
+
     def _candidate_urls(self) -> List[str]:
-        url = (self.config.ollama_url or "http://localhost:11434").rstrip("/")
-        urls = [url]
-        if "://localhost" in url:
-            urls.append(url.replace("://localhost", "://127.0.0.1"))
-        return urls
+        """127.0.0.1 first (fast on Windows), then the address exactly as typed."""
+        typed = (self.config.ollama_url or "http://localhost:11434").rstrip("/")
+        fast = fast_local_url(typed)
+        return [fast] if fast == typed else [fast, typed]
 
     def list_models(self) -> List[str]:
         """Names of the models pulled into Ollama (empty if unreachable)."""

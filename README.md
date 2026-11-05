@@ -173,26 +173,43 @@ Voice (Piper, Faster-Whisper) is desktop-only for now.
 
 ## Wikipedia (Optional — Simple English, ~360MB download)
 
+Download `simplewiki-latest-pages-articles.xml.bz2` from
+https://dumps.wikimedia.org/simplewiki/latest/ (or let Prometheus fetch it),
+keep it in `prometheus_setup/`, then **extract** it — a few minutes:
+
 ```bash
-python ingest.py --download-wikipedia                      # fetch the latest dump, extract, index
-python ingest.py --download-wikipedia --max-articles 50000 # quicker first pass
-python ingest.py --wikipedia path/to/dump.xml.bz2          # use a dump you already have
+python ingest.py --wikipedia prometheus_setup/simplewiki-latest-pages-articles.xml.bz2 --extract-only
+python ingest.py --download-wikipedia --extract-only     # same, downloading it for you
 ```
-`--download-wikipedia` fetches `simplewiki-latest-pages-articles.xml.bz2` from
-dumps.wikimedia.org into `prometheus_setup/`, resumes if the download is cut off,
-and checks it against Wikimedia's published SHA-1. Run it again any time to
-refresh: only changed articles are re-indexed, and articles removed from
-Wikipedia are removed here too (on a full run, not with `--max-articles`).
+
+That also builds the **search index** for the Wikipedia tab (SQLite full-text
+search, built in — a minute or two, no AI model), so every article's text is
+searchable straight away. For articles you extracted before this existed:
+
+```bash
+python ingest.py --wiki-index
+```
+
+Indexing for the AI library search as well (`python ingest.py --source
+wikipedia`) is optional and takes hours on a CPU. Re-running the extract with a newer dump only
+rewrites changed articles and removes deleted ones.
+
+**In chat:** when a message names something with its own article — a film,
+show, band, book, person, place — its opening paragraph is given to the model
+(by title, in milliseconds), and the reply says *From: Wikipedia — Title*.
+"have you seen inception?" finds *Inception (film)*. Everyday words don't
+count: "I watched a movie yesterday" pulls in nothing. Never used in the
+Medical tab or for step-by-step/diagnosis questions.
+
+**The Wikipedia tab** (second tab): finds anything in Wikipedia — a title, a
+name, a phrase, a few words that appear anywhere in an article. Exact titles
+come first, then the best matches, each with the matching text as its preview.
+Read whole articles, and **Ask about this** to talk about one in the chat tab.
 
 - Only real articles are kept — no talk/user/project pages, redirects or stubs
   under 100 words.
-- The uncompressed `.xml` works with `--wikipedia` too.
 - Keep dumps **outside** `knowledge_base/`: the desktop build copies that folder
-  next to the exe. Extracted articles go to `knowledge_base/wikipedia/`
-  (not committed).
-- Wikipedia is tier 3 — lowest trust, never used for medical answers. With
-  ChromaDB installed it lives only in the vector index, so it isn't loaded into
-  memory at startup.
+  next to the exe. `knowledge_base/wikipedia/` isn't committed.
 
 ---
 
@@ -275,6 +292,8 @@ in a separate ChromaDB collection — fully independent from the main library.
 ### Tabs
 | Tab | Focus |
 |-----|-------|
+| 💬 Prometheus | Chat — talk about anything (first tab, opens by default) |
+| 📖 Wikipedia | Search and read the offline Wikipedia |
 | 🔥 Survival | Water, fire, shelter, food, immediate threats |
 | ⚕️ Medical | Procedures, triage, improvised medicine, wound care |
 | ⚡ Electronics | Circuits, salvage, power generation, radio, solar |
@@ -282,7 +301,6 @@ in a separate ChromaDB collection — fully independent from the main library.
 | 🌱 Farm | Agriculture, food preservation, fermentation, animals |
 | 🔧 Build | Construction, tools, fabrication, blacksmithing |
 | ⚗️ Chemistry | Metallurgy, materials, synthesis, soap, explosives |
-| 💬 Prometheus | Companion, philosophy, psychology, meaning, memory |
 | ➕ Custom | Create tabs for your specific situation |
 
 ### Training Path — working things out from first principles
@@ -332,9 +350,21 @@ Under each library answer: **From:** the book and page it drew on, and the
 page itself as a picture (click for full size). Pages are rendered by
 `ingest.py` for PDFs in the medical, plant, survival, build, electronics,
 navigation and farming folders — re-run `python ingest.py` after adding PDFs.
+PDFs indexed before their folder had pictures are redone once, automatically,
+on the next `python ingest.py` (you'll see "↻ adding page pictures").
+
+### Follow-up questions
+"why?", "yes but why", "are you sure?" and other short follow-ups keep the
+sources of the answer they're about, and the model is told to explain its
+reasoning from them — or say plainly if the sources don't back it up.
 
 ### Speed
-A reply waits for the model to read its instructions before the first word.
+On Windows, "localhost" used to add about **2 seconds to every request**:
+Python tries IPv6 first, Ollama only listens on IPv4, and Windows waits before
+falling back. Prometheus now always talks to `127.0.0.1` for a local Ollama
+(your setting can still say localhost).
+
+A reply also waits for the model to read its instructions before the first word.
 These are now small: about 250 tokens for the chat tab (was ~2,600) and about
 1,500 for knowledge tabs (was ~3,300; library passages are trimmed to the part
 that matches your question). The model is kept loaded for 30 minutes, warmed up
@@ -531,6 +561,9 @@ prometheus/
 │
 ├── core/
 │   ├── pipeline.py            # Decision layers in one place (no UI code)
+│   ├── wiki_lookup.py         # Wikipedia by title (chat background, Wikipedia tab)
+│   ├── wiki_index.py          # Full-text search over every article (SQLite FTS5)
+│   ├── embedder.py            # One shared text-embedding model, offline once cached
 │   ├── platform_info.py       # Android / phone-layout detection
 │   ├── intent_router.py       # 10 intents, domain tiers, Training Path flag
 │   ├── rag.py                 # Tiered knowledge search, image lookup
@@ -566,6 +599,7 @@ prometheus/
 │   ├── workers.py             # LLMWorker, TrainingWorker, InitWorker
 │   ├── chat_view.py           # Messages, timing stamp, "Researching…" line, sources + page images
 │   ├── welcome.py             # Empty-tab welcome panel
+│   ├── wiki_search.py         # Wikipedia tab: search, read, ask about it
 │   ├── dev_panel.py           # Ctrl+D observability
 │   ├── assessment.py          # Situation assessment mode
 │   ├── doc_context.py         # Personal document manager

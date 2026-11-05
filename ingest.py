@@ -288,14 +288,11 @@ class Ingester:
 
     def _init_vector_db(self):
         try:
+            from core.embedder import get_embedder
             import chromadb
-            from sentence_transformers import SentenceTransformer
 
             print("Loading embedding model (all-MiniLM-L6-v2)...")
-            self.embedder = SentenceTransformer(
-                "all-MiniLM-L6-v2",
-                cache_folder="memory/model_cache"
-            )
+            self.embedder = get_embedder()
 
             client = chromadb.PersistentClient(path="memory/chroma_db")
 
@@ -361,9 +358,18 @@ class Ingester:
                     continue   # folder placeholder, not knowledge
 
                 file_hash = self._file_hash(file_path)
-                if file_hash in self.processed and not self.rebuild:
+                entry = self.processed.get(file_hash)
+                # A PDF indexed before its folder got page pictures is done again
+                # once, page by page, so its pictures exist and chunks know their page
+                needs_pages = (
+                    entry is not None and image_eligible and
+                    file_path.suffix.lower() == ".pdf" and not entry.get("paged")
+                )
+                if entry is not None and not self.rebuild and not needs_pages:
                     skipped += 1
                     continue
+                if needs_pages:
+                    print(f"  ↻ {file_path.name}: adding page pictures")
 
                 # Same contents as a file already indexed? Skip it.
                 content_sha = self._content_hash(file_path)
@@ -424,6 +430,7 @@ class Ingester:
                     "chunks": len(chunks),
                     "images": img_count,
                     "content_sha": content_sha,
+                    "paged": bool(is_pdf and image_eligible),
                 }
 
                 total_files += 1
@@ -927,7 +934,7 @@ def parse_wikipedia_dump(dump_path: Path, output_dir: Path,
 
 
 def ingest_wikipedia(dump_path: Optional[str] = None, max_articles: int = 0,
-                     download: bool = False) -> bool:
+                     download: bool = False, extract_only: bool = False) -> bool:
     """
     Extract a Wikipedia dump into knowledge_base/wikipedia/ and index it.
 
@@ -957,6 +964,19 @@ def ingest_wikipedia(dump_path: Optional[str] = None, max_articles: int = 0,
     if not count:
         print("  ✗ No articles found — is this a pages-articles dump?")
         return False
+
+    # Search inside every article (SQLite full-text — minutes, no AI model)
+    print("\n🔎 Building the Wikipedia search index…")
+    from core.wiki_index import build_index
+    build_index(output_dir, KNOWLEDGE_PATH / "wikipedia_search.sqlite")
+
+    if extract_only:
+        # Chat lookups and the Wikipedia tab read the extracted files directly,
+        # so this is enough to use it. Indexing adds meaning-based search later.
+        print(f"\n✅ Extracted to {output_dir}. Chat and the Wikipedia tab can use it now.\n"
+              f"   For meaning-based search too, index it later (slow — hours on a CPU):\n"
+              f"       python ingest.py --source wikipedia")
+        return True
 
     print(f"\nIndexing Wikipedia articles…")
     Ingester(rebuild=False).ingest_all(source_filter="wikipedia")
@@ -993,6 +1013,16 @@ def main():
         help="Download the latest Simple English Wikipedia dump, then ingest it"
     )
     parser.add_argument(
+        "--wiki-index",
+        action="store_true",
+        help="Build the Wikipedia search index from already-extracted articles (minutes)"
+    )
+    parser.add_argument(
+        "--extract-only",
+        action="store_true",
+        help="With --wikipedia/--download-wikipedia: extract articles but don't index them yet"
+    )
+    parser.add_argument(
         "--max-articles",
         type=int,
         default=0,
@@ -1010,9 +1040,15 @@ def main():
         create_sample_knowledge_base()
         return
 
+    if args.wiki_index:
+        from core.wiki_index import build_index
+        ok = build_index(KNOWLEDGE_PATH / "wikipedia", KNOWLEDGE_PATH / "wikipedia_search.sqlite") > 0
+        sys.exit(0 if ok else 1)
+
     if args.wikipedia or args.download_wikipedia:
         ok = ingest_wikipedia(args.wikipedia, max_articles=args.max_articles,
-                              download=args.download_wikipedia)
+                              download=args.download_wikipedia,
+                              extract_only=args.extract_only)
         sys.exit(0 if ok else 1)
 
     if args.stats:

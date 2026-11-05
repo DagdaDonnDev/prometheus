@@ -162,30 +162,66 @@ class SettingsDialog(QDialog):
         return w
 
     def _refresh_models(self):
-        """Step 1: reach Ollama at the typed address. Step 2: fill both boxes."""
+        """
+        Ask Ollama which models are installed — on a background thread, so the
+        window opens straight away and never freezes while Ollama answers.
+
+        Step 1: show the current choices immediately (marked "checking…")
+        Step 2: probe the typed address in the background
+        Step 3: fill both lists with what's installed
+        """
         from core.config import Config as _C
-        probe = self._llm_probe
-        probe.config = _C(**{**self.config.__dict__,
-                             "ollama_url": self._ollama_url.text().strip() or self.config.ollama_url})
+        from PySide6.QtCore import QThread, Signal
+
         current = (self._fast_model.currentData() or self.config.fast_model,
                    self._companion_model.currentData() or self.config.companion_model)
 
-        if probe.is_available():
-            installed = probe.list_models()
+        # Step 1
+        self._ollama_status.setText("Checking Ollama…")
+        if self._fast_model.count() == 0:
+            self._fill_model_boxes([], current)
+
+        # Step 2
+        probe = self._llm_probe
+        probe.config = _C(**{**self.config.__dict__,
+                             "ollama_url": self._ollama_url.text().strip() or self.config.ollama_url})
+
+        class _Probe(QThread):
+            done = Signal(dict)
+            def run(inner):
+                ok = probe.is_available()
+                inner.done.emit({"ok": ok, "error": probe.last_error,
+                                 "installed": probe.list_models() if ok else []})
+
+        if getattr(self, "_probe_thread", None) and self._probe_thread.isRunning():
+            return
+        self._probe_thread = _Probe(self)
+        self._probe_thread.done.connect(lambda r, cur=current: self._on_models(r, cur))
+        self._probe_thread.start()
+
+    def _on_models(self, result: dict, current):
+        # Step 3
+        installed = result["installed"]
+        if result["ok"]:
             self._ollama_status.setText(
                 f"Connected — {len(installed)} model(s) installed." if installed
-                else "Connected, but no models yet. Run: ollama pull llama3.2:3b"
+                else "Connected, but no models yet. Run: ollama pull <model name>"
             )
         else:
-            installed = []
             self._ollama_status.setText(
-                f"Can't reach Ollama ({probe.last_error}). Open the Ollama app, "
+                f"Can't reach Ollama ({result['error']}). Open the Ollama app, "
                 f"or run: ollama serve"
             )
+        # Keep whatever was picked while the check ran
+        current = (self._fast_model.currentData() or current[0],
+                   self._companion_model.currentData() or current[1])
+        self._fill_model_boxes(installed, current)
 
-        # Each item's data is the exact Ollama name. A saved model that isn't
-        # installed stays visible (marked) so you can see what's set.
+    def _fill_model_boxes(self, installed, current):
+        """Each item's data is the exact Ollama name. A saved model that isn't
+        installed stays visible (marked) so you can see what's set."""
         from core.llm import LLMEngine as _L
+        checking = not installed and self._ollama_status.text().startswith("Checking")
         for box, value in ((self._fast_model, current[0]), (self._companion_model, current[1])):
             box.blockSignals(True)
             box.clear()
@@ -195,7 +231,8 @@ class SettingsDialog(QDialog):
             if match:
                 box.setCurrentIndex(box.findData(match))
             elif value:
-                box.addItem(f"{value}  (not installed)   ▾", value)
+                note = "checking…" if checking else "not installed"
+                box.addItem(f"{value}  ({note})   ▾", value)
                 box.setCurrentIndex(box.count() - 1)
             box.setEnabled(box.count() > 0)
             box.blockSignals(False)

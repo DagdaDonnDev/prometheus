@@ -494,7 +494,13 @@ class MainWindow(QMainWindow):
             self._show_messages_panel()
             return
 
+        # Wikipedia tab — search and read, not a chat
+        if tab_id == "wikipedia":
+            self._show_wiki_panel()
+            return
+
         self._hide_messages_panel()
+        self._hide_wiki_panel()
         self.chat_view.load_tab(tab)
 
         # Medical tab warning
@@ -505,6 +511,30 @@ class MainWindow(QMainWindow):
             )
 
         self.setWindowTitle(f"Prometheus — {tab.icon} {tab.name}")
+
+    def _show_wiki_panel(self):
+        from ui.wiki_search import WikiSearchWidget
+        self._hide_messages_panel()
+        if not hasattr(self, "_wiki_widget"):
+            self._wiki_widget = WikiSearchWidget(self.knowledge)
+            self._wiki_widget.ask_about.connect(self._ask_about_article)
+            self.splitter.insertWidget(0, self._wiki_widget)
+        self.chat_view.hide()
+        self.input_bar.hide()
+        self._wiki_widget.show()
+        self._wiki_widget.focus_search()
+        self.setWindowTitle(f"{self.config.assistant_name or 'Prometheus'} — 📖 Wikipedia")
+
+    def _hide_wiki_panel(self):
+        if hasattr(self, "_wiki_widget"):
+            self._wiki_widget.hide()
+
+    def _ask_about_article(self, title: str):
+        """'Ask about this' in the Wikipedia tab → the chat tab, asking about it."""
+        if not title or self._generating:
+            return
+        self._load_tab("prometheus")
+        self._on_send(f"Tell me about {title}")
 
     def _show_messages_panel(self):
         """Show P2P messages panel instead of chat view."""

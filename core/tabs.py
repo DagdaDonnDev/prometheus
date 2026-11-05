@@ -226,6 +226,14 @@ DEFAULT_TABS = [
             "Be that person completely."
         )
     ),
+    # Tab 2: search and read the offline Wikipedia (not a chat)
+    Tab(
+        id="wikipedia",
+        name="Wikipedia",
+        icon="📖",
+        domains=["wikipedia"],
+        system_prompt="",
+    ),
     Tab(
         id="survival",
         name="Survival",

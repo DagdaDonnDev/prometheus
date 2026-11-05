@@ -614,3 +614,26 @@ QListWidget::item:selected, QTableWidget::item:selected {
     border-left: 3px solid #f0a500;
     padding-left: 10px;
 }
+
+/* ── Wikipedia tab ── */
+#wikiSearch { font-size: 14px; padding: 8px 10px; }
+#wikiResults {
+    background-color: #151515;
+    border: 1px solid #2b2b2b;
+    border-radius: 6px;
+}
+#wikiResults::item { border-left: 3px solid transparent; }
+#wikiResults::item:selected, #wikiResults::item:hover {
+    background-color: #1e1e1e;
+    border-left: 3px solid #f0a500;
+}
+#wikiResultTitle { color: #ececec; font-weight: 600; }
+#wikiResultSnippet { color: #a6a6a6; font-size: 11px; }
+#wikiText {
+    background-color: #151515;
+    color: #ececec;
+    border: 1px solid #2b2b2b;
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-size: 14px;
+}

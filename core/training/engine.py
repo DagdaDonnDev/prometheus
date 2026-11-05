@@ -217,12 +217,14 @@ class DerivationEngine:
 
     @staticmethod
     def _parse_methods(raw: str) -> List[Dict]:
-        parts = re.split(r"(?im)^\s*\**\s*method\s*(\d)\s*[:.)]?\**", raw)
+        # Accept the ways small models format it: "METHOD 1:", "### Method 1",
+        # "**Method 1:**", "- Method 1 —", "Method 1)"
+        parts = re.split(r"(?im)^[\s#*\-]*method\s*(\d)\s*[:.)\-—–]?[*\s]*", raw)
         methods = []
         # re.split gives [preamble, num, body, num, body, ...]
         for i in range(1, len(parts) - 1, 2):
             body = parts[i + 1]
-            m = re.search(r"(?im)^\s*\**\s*result\s*[:\-]\**\s*(.+)$", body)
+            m = re.search(r"(?im)^[\s#*\-]*(?:final\s+)?result\s*\**\s*[:\-—–=]\s*\**\s*(.+)$", body)
             result = m.group(1).strip() if m else ""
             steps_text = body[:m.start()] if m else body
             steps = [s.strip(" -*\t") for s in steps_text.strip().splitlines() if s.strip(" -*\t")]
@@ -359,6 +361,7 @@ class DerivationEngine:
             "verified":   len(ok),
             "violations": outcome["violations"],
             "problems":   [m["problems"] for m in outcome["methods"]],
+            "raw":        (outcome.get("raw") or "")[:600],   # for debug logs
         })
 
         # Contradicting a law → on hold, and everything built on it trusted less

@@ -115,13 +115,10 @@ class KnowledgeBase:
             if status_callback:
                 status_callback("Loading embedding model...")
 
-            from sentence_transformers import SentenceTransformer
+            from core.embedder import get_embedder
             import chromadb
 
-            self.embedder = SentenceTransformer(
-                "all-MiniLM-L6-v2",
-                cache_folder="memory/model_cache"
-            )
+            self.embedder = get_embedder()   # shared, offline once downloaded
 
             client = chromadb.PersistentClient(path=VECTOR_DB_PATH)
             self.collection = client.get_or_create_collection(
