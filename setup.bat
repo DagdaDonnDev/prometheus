@@ -21,9 +21,11 @@ echo  ----------------
 echo.
 
 REM -- Step 1: Python -------------------------------------------
+REM Prefer "python" - the same one you'd type to run Prometheus later.
+REM ("py" can open a different install, so packages would land elsewhere.)
 set "PY="
-where py >nul 2>nul && set "PY=py -3"
-if not defined PY ( where python >nul 2>nul && set "PY=python" )
+where python >nul 2>nul && set "PY=python"
+if not defined PY ( where py >nul 2>nul && set "PY=py -3" )
 if not defined PY (
     echo [X] Python was not found.
     echo     Install Python 3.9 or newer from https://www.python.org/downloads/

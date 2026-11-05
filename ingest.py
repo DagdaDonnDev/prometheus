@@ -31,6 +31,9 @@ IMAGE_ELIGIBLE_DOMAINS = {
     "plants_temperate", "plants_tropical", "plants_desert", "plants_arctic",
     "medical", "emergency_medicine", "where_no_doctor", "where_no_dentist",
     "blacksmithing", "electronics", "build", "navigation",
+    # Survival manuals and practical books are full of diagrams too
+    "survival", "army_fm_3_05_70", "farming", "food_preservation",
+    "nuclear_survival", "weather_patterns", "survivor_library",
 }
 
 # Target image dimensions for extracted pages (width in px, maintain aspect)
@@ -61,7 +64,10 @@ class TextExtractor:
         Page numbers are 1-indexed.
         """
         try:
-            import fitz
+            try:
+                import pymupdf as fitz   # PyMuPDF ≥ 1.24 name
+            except ImportError:
+                import fitz
             doc = fitz.open(str(path))
             pages = []
             for i, page in enumerate(doc):
@@ -90,7 +96,10 @@ class TextExtractor:
         page_images: Dict[int, Path] = {}
 
         try:
-            import fitz
+            try:
+                import pymupdf as fitz   # PyMuPDF ≥ 1.24 name
+            except ImportError:
+                import fitz
             image_dir.mkdir(parents=True, exist_ok=True)
             doc = fitz.open(str(path))
 
@@ -125,7 +134,10 @@ class TextExtractor:
 
     def _extract_pdf(self, path: Path) -> str:
         try:
-            import fitz  # PyMuPDF
+            try:
+                import pymupdf as fitz   # PyMuPDF ≥ 1.24 name
+            except ImportError:
+                import fitz
             doc = fitz.open(str(path))
             text = ""
             for page in doc:

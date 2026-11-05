@@ -28,7 +28,8 @@ class SettingsDialog(QDialog):
 
         tabs = QTabWidget()
 
-        tabs.addTab(self._build_user_tab(), "👤 Identity")
+        tabs.addTab(self._build_user_tab(), "👤 You")
+        tabs.addTab(self._build_assistant_tab(), "💬 Assistant")
         tabs.addTab(self._build_model_tab(), "🤖 Model")
         tabs.addTab(self._build_voice_tab(), "🎤 Voice")
         tabs.addTab(self._build_about_tab(), "ℹ About")
@@ -73,6 +74,37 @@ class SettingsDialog(QDialog):
 
         return w
 
+    def _build_assistant_tab(self) -> QWidget:
+        """What the assistant is called and how it comes across."""
+        from PySide6.QtWidgets import QPlainTextEdit
+        w = QWidget()
+        form = QFormLayout(w)
+        form.setSpacing(12)
+
+        self._assistant_name = QLineEdit(self.config.assistant_name or "Prometheus")
+        self._assistant_name.setPlaceholderText("Prometheus")
+        self._assistant_name.setMaxLength(40)
+        form.addRow("Name:", self._assistant_name)
+
+        self._assistant_persona = QPlainTextEdit(self.config.assistant_persona or "")
+        self._assistant_persona.setPlaceholderText(
+            "How it comes across — leave empty for a plain, easy-going friend.\n"
+            "e.g. a calm old sailor who's seen a lot and doesn't rush you\n"
+            "e.g. dry sense of humour, straight talker, loves a tangent"
+        )
+        self._assistant_persona.setFixedHeight(96)
+        form.addRow("Personality:", self._assistant_persona)
+
+        note = QLabel(
+            "The name shows in the header and on the chat tab, and the model uses it.\n"
+            "Personality shapes the chat tab. Knowledge tabs stay factual."
+        )
+        note.setObjectName("noteLabel")
+        from PySide6.QtWidgets import QSizePolicy
+        note.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        form.addRow(note)
+        return w
+
     def _build_model_tab(self) -> QWidget:
         """
         Pick the models. Each box lists what's installed in Ollama, and
@@ -88,13 +120,12 @@ class SettingsDialog(QDialog):
         self._ollama_url.setPlaceholderText("http://localhost:11434")
         form.addRow("Ollama address:", self._ollama_url)
 
+        # Pick from what Ollama has installed — no typing
         self._fast_model = QComboBox()
-        self._fast_model.setEditable(True)
         form.addRow("Knowledge tabs model:", self._fast_model)
 
         self._companion_model = QComboBox()
-        self._companion_model.setEditable(True)
-        form.addRow("Companion tab model:", self._companion_model)
+        form.addRow("Chat tab model:", self._companion_model)
 
         row = QHBoxLayout()
         refresh = QPushButton("Check Ollama")
@@ -119,9 +150,9 @@ class SettingsDialog(QDialog):
         form.addRow("Library passages used:", self._rag_results)
 
         note = QLabel(
-            "Get a model:  ollama pull llama3.2:3b\n"
-            "Smaller / faster:  llama3.2:1b      Better quality:  llama3.1:8b\n"
-            "The companion tab can use a bigger model than the knowledge tabs."
+            "The lists show the models installed in Ollama. To add one:\n"
+            "    ollama pull <model name>     then press Check Ollama.\n"
+            "The chat tab can use a different model from the knowledge tabs."
         )
         note.setObjectName("noteLabel")
         form.addRow(note)
@@ -136,8 +167,8 @@ class SettingsDialog(QDialog):
         probe = self._llm_probe
         probe.config = _C(**{**self.config.__dict__,
                              "ollama_url": self._ollama_url.text().strip() or self.config.ollama_url})
-        current = (self._fast_model.currentText() or self.config.fast_model,
-                   self._companion_model.currentText() or self.config.companion_model)
+        current = (self._fast_model.currentData() or self.config.fast_model,
+                   self._companion_model.currentData() or self.config.companion_model)
 
         if probe.is_available():
             installed = probe.list_models()
@@ -152,13 +183,21 @@ class SettingsDialog(QDialog):
                 f"or run: ollama serve"
             )
 
+        # Each item's data is the exact Ollama name. A saved model that isn't
+        # installed stays visible (marked) so you can see what's set.
+        from core.llm import LLMEngine as _L
         for box, value in ((self._fast_model, current[0]), (self._companion_model, current[1])):
             box.blockSignals(True)
             box.clear()
-            box.addItems(installed)
-            if value and value not in installed:
-                box.addItem(value)
-            box.setCurrentText(value)
+            for m in installed:
+                box.addItem(f"{m}   ▾", m)   # ▾ shows it's a list (styled arrows draw nothing)
+            match = next((m for m in installed if _L._has_model([m], value)), None)
+            if match:
+                box.setCurrentIndex(box.findData(match))
+            elif value:
+                box.addItem(f"{value}  (not installed)   ▾", value)
+                box.setCurrentIndex(box.count() - 1)
+            box.setEnabled(box.count() > 0)
             box.blockSignals(False)
 
     def _build_voice_tab(self) -> QWidget:
@@ -254,10 +293,14 @@ class SettingsDialog(QDialog):
             u["known_skills"] = [s.strip() for s in skills_text.split(",") if s.strip()]
 
         # Save model settings
-        fast = self._fast_model.currentText().strip() or self.config.fast_model
+        fast = (self._fast_model.currentData() or self.config.fast_model).strip()
         self.config.fast_model      = fast
         self.config.llm_model       = fast      # summaries and checks use the same model
-        self.config.companion_model = self._companion_model.currentText().strip() or fast
+        self.config.companion_model = (self._companion_model.currentData() or fast).strip()
+
+        # Assistant
+        self.config.assistant_name    = self._assistant_name.text().strip() or "Prometheus"
+        self.config.assistant_persona = self._assistant_persona.toPlainText().strip()
         self.config.ollama_url      = self._ollama_url.text().strip() or "http://localhost:11434"
         self.config.max_tokens = self._max_tokens.value()
         self.config.rag_results = self._rag_results.value()

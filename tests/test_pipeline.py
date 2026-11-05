@@ -51,6 +51,43 @@ class TestPipeline(unittest.TestCase):
         self.assertTrue(out.system_prompt)
         self.assertIsNotNone(out.mode)
 
+    def test_companion_prompt_is_small(self):
+        # The old companion prompt was ~2,600 tokens — the main cause of a 3 s wait
+        plan, out = self.prepare("hey, how's it going?", "prometheus")
+        self.assertLess(len(out.system_prompt), 1400)
+        self.assertNotIn("I hear you\" must", out.system_prompt)
+        self.assertEqual(out.images, [])
+        self.assertEqual(out.sources, [])
+
+    def test_knowledge_prompt_trimmed(self):
+        plan, out = self.prepare("how do i purify water", "survival")
+        self.assertLess(len(out.system_prompt), 8000)
+
+    def test_everyday_help_is_not_emergency(self):
+        for q in ("can you help me plan my week", "help me think something through"):
+            self.assertNotEqual(self.pipe.route(q, "survival").intent.value, "emergency", q)
+        self.assertEqual(self.pipe.route("help he's not breathing", "medical").intent.value, "emergency")
+
+    def test_crisis_any_tab(self):
+        for tab in ("prometheus", "survival", "electronics"):
+            plan, out = self.prepare("i want to kill myself", tab)
+            self.assertTrue(plan.is_crisis, tab)
+            self.assertEqual(out.mode.value, "emergency")
+            self.assertIn("safe right now", out.system_prompt)
+
+    def test_assistant_name(self):
+        self.pipe.config.assistant_name = "Ember"
+        self.pipe.config.assistant_persona = "dry humour"
+        try:
+            plan, out = self.prepare("hey", "prometheus")
+            self.assertTrue(out.system_prompt.startswith("You are Ember."))
+            self.assertIn("dry humour", out.system_prompt)
+            plan, out = self.prepare("how do i purify water", "survival")
+            self.assertIn("You are Ember", out.system_prompt)
+        finally:
+            self.pipe.config.assistant_name = "Prometheus"
+            self.pipe.config.assistant_persona = ""
+
     def test_not_android_here(self):
         self.assertFalse(IS_ANDROID)
 

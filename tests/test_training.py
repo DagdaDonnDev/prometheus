@@ -58,6 +58,59 @@ class FakeLLM:
         return self.reply
 
 
+GOOD_REPLIES = {
+    "Kirchhoff's voltage law": """METHOD 1:
+Conservation of energy: a charge going round a loop ends where it started.
+So the energy it gains from sources equals the energy it loses in loads.
+RESULT: sum of voltages around the loop = 0
+METHOD 2:
+Using conservation of energy, voltage is energy per charge.
+Rises and drops around a closed path cancel.
+RESULT: voltages around a loop sum to zero
+METHOD 3:
+From conservation of energy applied to a closed loop.
+Supply voltage must be used up by the drops.
+RESULT: sum of voltages around a loop = 0
+""",
+    "Resistors in series": """METHOD 1:
+Using Ohm's law, each resistor drops V1 = I R1 and V2 = I R2 with the same current.
+Kirchhoff's voltage law: V = V1 + V2 = I (R1 + R2).
+RESULT: R_total = R1 + R2
+METHOD 2:
+Ohm's law for the whole chain: V = I R_total.
+By KVL the drops add, so I R_total = I R1 + I R2.
+RESULT: R_total = R1 + R2
+METHOD 3:
+Same current through each, by Ohm's law the drops are I R1 and I R2.
+Voltage law adds them.
+RESULT: R_total = R1 + R2
+""",
+    "Voltage divider": """METHOD 1:
+Resistors in series give R1 + R2, so by Ohm's law I = V_in / (R1 + R2).
+The drop across R2 is I R2.
+RESULT: V_out = V_in × R2 / (R1 + R2)
+METHOD 2:
+Using Ohm's law with the series total, current is V_in over R1 + R2.
+Multiply by R2.
+RESULT: V_out = V_in * R2 / (R1 + R2)
+METHOD 3:
+Series resistance R1 + R2 carries the same current; Ohm's law on R2.
+Gives the fraction R2 / (R1 + R2) of the input.
+RESULT: V_out = V_in R2 / (R1 + R2)
+""",
+}
+
+
+class ConceptLLM:
+    """Fake model that answers each 'Derive: <name>' with a correct derivation."""
+    def __init__(self):
+        self.calls = 0
+    def complete(self, system, prompt, **kw):
+        self.calls += 1
+        name = prompt.split("Derive: ", 1)[1].split("\n", 1)[0].strip()
+        return GOOD_REPLIES.get(name, GOOD_POWER)
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -182,11 +235,30 @@ class TestEngine(Base):
         self.assertEqual(r["status"], "BLOCKED")
         self.assertTrue(self.graph.get("electrical_power")["quarantined"])
 
-    def test_prereqs(self):
-        e = self.engine(GOOD_POWER)
-        r = e.run("explain a voltage divider", "electronics")
-        self.assertEqual(r["status"], "NEEDS_PREREQS")
-        self.assertEqual(e.llm.calls, 0)
+    def test_building_blocks_researched_automatically(self):
+        """A tier-3 question works out its untrained building blocks first — no user question."""
+        e = DerivationEngine(self.graph, self.kb, ConceptLLM())
+        seen = []
+        r = e.run("explain a voltage divider", "electronics", progress=seen.append)
+        self.assertEqual(r["status"], "DERIVED", r)
+        self.assertEqual(seen, ["Researching Kirchhoff's voltage law",
+                                "Researching Resistors in series",
+                                "Researching Voltage divider"])
+        self.assertTrue(self.graph.is_trained("kirchhoff_voltage"))
+        self.assertTrue(self.graph.is_trained("series_resistance"))
+        self.assertNotIn("Is this right", r["text"])
+
+    def test_building_block_fails_falls_back(self):
+        r = self.engine(BAD_POWER).run("explain a voltage divider", "electronics")
+        self.assertEqual(r["status"], "NEEDS_TRAINING")
+        self.assertIn("haven't been trained", r["reason"])
+
+    def test_self_check_sets_trust(self):
+        self.engine(GOOD_POWER).run("explain electrical power", "electronics")
+        node = self.graph.get("electrical_power")
+        self.assertAlmostEqual(node["confidence"], 0.5)     # 3 of 3 agree → learned
+        self.assertEqual(node["success_count"], 1)
+        self.assertTrue(self.graph.is_trained("electrical_power"))
 
     def test_needs_data(self):
         r = self.engine(GOOD_POWER).run("calculate the power used by my lamp", "electronics")

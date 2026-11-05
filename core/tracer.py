@@ -79,6 +79,21 @@ class QueryTrace:
     response_chars: int = 0
     response_ms:    int = 0         # full completion time in ms (secondary)
     first_token_ms: int = 0         # speak-start: first token / TTS start (headline)
+    # Where the wait comes from (v23)
+    prep_ms:        int = 0         # retrieval + gates + prompt building, before the model call
+    load_ms:        int = 0         # Ollama loading the model into memory (0 when already loaded)
+    prompt_tokens:  int = 0         # tokens the model had to read before writing
+    prompt_eval_ms: int = 0         # time spent reading them
+    gen_tokens:     int = 0
+    gen_ms:         int = 0
+
+    def breakdown(self) -> str:
+        """One line: where the time to the first word went."""
+        if not (self.prompt_tokens or self.load_ms):
+            return f"prep {self.prep_ms} ms"
+        return (f"prep {self.prep_ms} ms · model load {self.load_ms} ms · "
+                f"reading prompt {self.prompt_eval_ms} ms ({self.prompt_tokens} tokens) · "
+                f"writing {self.gen_ms} ms ({self.gen_tokens} tokens)")
     llm_model:      str = ""
 
     # Query path (v22)
@@ -237,6 +252,9 @@ class QueryTracer:
             "slow_speak_start_rate":   (sum(1 for t in timed if t.first_token_ms > 800) / len(timed)) if timed else 0,
             "avg_response_ms":         sum(t.response_ms for t in traces) / total,
             "training_path_rate":      sum(1 for t in traces if t.path == "training") / total,
+            "avg_prompt_tokens":       (sum(t.prompt_tokens for t in traces if t.prompt_tokens) /
+                                        max(1, sum(1 for t in traces if t.prompt_tokens))),
+            "avg_load_ms":             (sum(t.load_ms for t in traces) / total),
             "avg_top_confidence":      sum(t.retrieval.top_score for t in traces) / total,
             "emergency_count":         sum(1 for t in traces if t.intent == "emergency"),
             "redirect_rate":           sum(1 for t in traces if t.redirect_suggested) / total,
@@ -246,3 +264,39 @@ class QueryTracer:
 # ── Global tracer instance ─────────────────────────────────────────────────
 
 tracer = QueryTracer()
+
+
+# ── Summary for logs: python -m core.tracer [N] ────────────────────────────
+
+def print_recent(n: int = 10):
+    """
+    Print the last n replies from memory/query_traces.jsonl, one line each:
+    tab, mode, speak-start, and where the wait came from. Used by
+    debug_run.bat so a saved log shows why replies were fast or slow.
+    """
+    if not TRACE_LOG_PATH.exists():
+        print("No replies recorded yet (memory/query_traces.jsonl not found).")
+        return
+    lines = TRACE_LOG_PATH.read_text(encoding="utf-8", errors="replace").splitlines()[-n:]
+    if not lines:
+        print("No replies recorded yet.")
+        return
+    print(f"Last {len(lines)} replies (oldest first):")
+    for line in lines:
+        try:
+            d = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        t = QueryTrace(**{k: v for k, v in d.items()
+                          if k in QueryTrace.__dataclass_fields__
+                          and k not in ("retrieval", "sufficiency")})
+        when = time.strftime("%H:%M:%S", time.localtime(t.timestamp))
+        print(f"  {when}  {t.tab_id:<11} {t.path:<9} {t.gate_mode or '-':<9} "
+              f"model={t.llm_model or '-'}  🔊 {t.first_token_ms} ms  ✓ {t.response_ms} ms")
+        print(f"            {t.breakdown()}")
+        print(f"            \"{t.query_preview}\"")
+
+
+if __name__ == "__main__":
+    import sys
+    print_recent(int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else 10)

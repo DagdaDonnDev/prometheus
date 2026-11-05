@@ -32,8 +32,12 @@ Decision layers live in `core/pipeline.py` (`QueryPipeline`, no Qt). The window 
   pushed to descendants. Quarantine = 0 for children. `success_count` only changes in `apply_delta`.
 - `engine.py` — the concept's own anchor is never given to the model (it would hand over the answer);
   it's used to show "Checked against the library".
-- `session.py` — verdicts: correct +0.25, not_quite −0.10, incorrect −0.25, contradiction → quarantine.
-  Lemma at ≥3 successes, ≥80% confidence, ≥75% success rate; demoted below 50%.
+- No user verdicts (owner: "the person won't know"). `engine.run(query, tab, progress)` self-checks:
+  `SELF_CHECK_GAIN` 3/3 → +0.5 (learned), 2/3 → +0.3, 1 → +0.05, 0 → −0.1; DERIVED needs ≥2 agree.
+  Untrained ancestors (≤3) are derived first, each reported via `progress("Researching X")` →
+  `TrainingWorker.progress` → `ChatView.show_researching`. Failures → NEEDS_TRAINING / BLOCKED /
+  FOUNDATIONAL_GAP with "I haven't been trained on X yet" → library fallback note.
+  `session.py` (verdicts) is kept but no UI calls it. Lemma rules unchanged.
 - Anchors live in `knowledge_base/scientific_reference/`.
   If you add a concept, add matching text there and check `TestEngine.test_all_anchors_resolve`.
 
@@ -75,6 +79,21 @@ Decision layers live in `core/pipeline.py` (`QueryPipeline`, no Qt). The window 
 - Ollama: `OllamaCheckWorker` (QThread) — never check on the UI thread; retries every 10 s;
   `is_available()` falls back from localhost to 127.0.0.1. Settings → Model edits `fast_model` and
   `companion_model` (chats use these; `llm_model` mirrors fast_model; old configs migrate in `Config.load`).
+
+## Chat tab, speed, crisis (2026-11-05, owner uses LFM2.5-1.2B-Instruct)
+- Companion = `pipeline._prepare_companion`: COMPANION_PERSONALITY (friend, length follows mood,
+  "mhm" ok, no therapy talk) + name + optional 2×90-word background only for COMPANION_TOPICS.
+  Never route the companion through the full knowledge prompt (it was ~2,600 tokens → ~3 s).
+- Knowledge prompts: ≤ `rag_results` passages, each `trim_passage`d to 130 words.
+- Every Ollama request sends `keep_alive` and a fixed `num_ctx` (changing num_ctx reloads the model).
+  `warm_up()` runs once Ollama is ready. `llm.last_stats` → trace (load / prompt tokens / eval ms).
+- Crisis: `intent_router.is_crisis` (suicide/self-harm wording) → `RoutingPlan.is_crisis` →
+  `CRISIS_PROMPT`, any tab. Bare "help" is NOT an emergency (only "please help", "help!" …).
+- Assistant name/persona: `config.assistant_name/assistant_persona`; `pipeline._tab_system` swaps
+  "You are Prometheus"; header + companion tab label follow it.
+- P2P/Messages hidden: `core/features.P2P_ENABLED = False` (no tab, no sockets).
+- Answers carry their own `images`/`sources` (PreparedAnswer) — never read `knowledge.get_last_*`
+  after the fact (the companion path doesn't search, so those can be stale).
 
 ## Repo hygiene
 - `.gitattributes` keeps `setup.bat` CRLF and `setup.sh` LF; `setup.sh` is committed executable.

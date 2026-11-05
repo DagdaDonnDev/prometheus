@@ -256,7 +256,7 @@ QScrollArea#tabScroll { border: none; background: transparent; }
     background-color: #121212;
     border-top: 1px solid #2b2b2b;
 }
-QTextEdit {
+QTextEdit, QPlainTextEdit {
     background-color: #1a1a1a;
     color: #ececec;
     border: 1px solid #2b2b2b;
@@ -357,7 +357,7 @@ QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
     border: 1px solid #5a4a20;
 }
-QComboBox::drop-down { border: none; width: 22px; }
+QComboBox::drop-down { border: none; border-left: 1px solid #2b2b2b; width: 22px; }
 QComboBox QAbstractItemView {
     background-color: #1e1e1e;
     color: #ececec;
@@ -598,4 +598,19 @@ QListWidget::item:selected, QTableWidget::item:selected {
     border: 1px solid #3a2222;
     border-left: 4px solid #d33;
     border-radius: 8px;
+}
+
+/* Source page image under an answer */
+#imagePanel { background: transparent; }
+#sourceImage {
+    border: 1px solid #2b2b2b;
+    border-radius: 4px;
+}
+
+/* "Researching <topic>…" while the Training Path works */
+#researchLine {
+    color: #a6a6a6;
+    font-size: 12px;
+    border-left: 3px solid #f0a500;
+    padding-left: 10px;
 }

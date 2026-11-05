@@ -301,14 +301,47 @@ instead of looking it up.
 - The model is asked for three independent methods. Each is checked: the result
   must have the right form, must be reached rather than stated up front, must use
   a given foundation, and must not contradict a tier-1 law.
-- Under each derivation: **Right / Not quite / Wrong / Contradicts a source**.
-  Only your answers move a concept's trust. After 3 confirmations at 80%+
-  it becomes a trusted result. "Contradicts a source" puts it on hold and
-  lowers trust in everything built on it.
-- A tier-3 concept needs its building blocks trained first. If they aren't,
-  Prometheus answers from the library and tells you which ones to ask about.
+- **You're never asked to check its work.** Its own three-way check decides:
+  all three agree → learned; two of three → partly; fewer → not trusted, and the
+  answer comes from the library instead with "I haven't been trained on … yet".
+  Contradicting a law puts the concept on hold and lowers trust in everything
+  built on it.
+- While it works, the chat shows **🔍 Researching \<topic\>…**. If a tier-3
+  question needs building blocks it hasn't learned (up to three), it works those
+  out first and names each one as it goes.
 - If a calculation needs numbers you didn't give, it asks for them.
 - Learning is saved in `memory/training/` and included in backups.
+
+### The chat tab
+Talks like a friend, not a counsellor: curious, asks about what you said, has
+opinions. Reply length follows how you are — short and steady when you're
+struggling, an invested listener when you're excited, normal in between.
+"mhm" is a valid reply. It only looks things up when you ask about philosophy
+or psychology.
+
+Anything about suicide or self-harm, in any tab, switches to a calm, direct
+crisis response that asks whether you're safe and points you to a real person.
+
+### Settings → Assistant
+Change the assistant's **name** (header, chat tab, and what the model calls
+itself) and its **personality** in plain words, e.g. "a calm old sailor who
+doesn't rush you". The knowledge tabs stay factual whatever you choose.
+
+### Sources and pictures
+Under each library answer: **From:** the book and page it drew on, and the
+page itself as a picture (click for full size). Pages are rendered by
+`ingest.py` for PDFs in the medical, plant, survival, build, electronics,
+navigation and farming folders — re-run `python ingest.py` after adding PDFs.
+
+### Speed
+A reply waits for the model to read its instructions before the first word.
+These are now small: about 250 tokens for the chat tab (was ~2,600) and about
+1,500 for knowledge tabs (was ~3,300; library passages are trimmed to the part
+that matches your question). The model is kept loaded for 30 minutes, warmed up
+at startup, and always run with the same context size, so Ollama never reloads
+it between messages. Hover a reply's timing stamp, or open the Developer panel's
+Patterns tab, to see where the time went: preparation, model load, reading the
+prompt (with its size), and writing.
 
 ### Speak-start timing
 Replies stream straight into the voice, so you hear an answer as soon as the
@@ -520,7 +553,8 @@ prometheus/
 │   ├── context_manager.py     # Rolling conversation summaries
 │   ├── map_engine.py          # Offline maps, biome and resource context
 │   ├── memory.py              # Persistent user state
-│   ├── p2p.py                 # Local-network messaging
+│   ├── p2p.py                 # Local-network messaging (off — core/features.py)
+│   ├── features.py            # Feature switches (P2P_ENABLED = False)
 │   ├── stt.py                 # Faster-Whisper speech-to-text
 │   ├── tabs.py                # Tab definitions and management
 │   ├── tts.py                 # Piper text-to-speech (streaming)
@@ -530,7 +564,8 @@ prometheus/
 │   ├── main_window.py         # Window, query fork, both paths
 │   ├── layout_helpers.py      # Desktop vs phone dialog sizing
 │   ├── workers.py             # LLMWorker, TrainingWorker, InitWorker
-│   ├── chat_view.py           # Messages, timing stamp, verdict row, images
+│   ├── chat_view.py           # Messages, timing stamp, "Researching…" line, sources + page images
+│   ├── welcome.py             # Empty-tab welcome panel
 │   ├── dev_panel.py           # Ctrl+D observability
 │   ├── assessment.py          # Situation assessment mode
 │   ├── doc_context.py         # Personal document manager
@@ -566,6 +601,13 @@ prometheus/
     ├── chroma_db/             # Main knowledge base vectors
     └── model_cache/           # Embedding model cache
 ```
+
+## Debug run (temporary)
+Double-click `debug_run.bat`. It runs Prometheus normally. When you close it,
+`logs\run_<date>_<time>.log` holds your Python/PySide6/Ollama versions, the
+installed and loaded models, your settings, everything the app printed
+(errors included) and the last 10 replies with where each wait came from. The
+folder opens with the file selected, ready to send. `logs/` isn't committed.
 
 ## Testing
 

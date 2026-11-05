@@ -129,7 +129,10 @@ def extract_text(file_path: Path) -> Tuple[str, str]:
 
 def _extract_pdf(path: Path) -> Tuple[str, str]:
     try:
-        import fitz  # PyMuPDF
+        try:
+            import pymupdf as fitz   # PyMuPDF ≥ 1.24 name
+        except ImportError:
+            import fitz
         doc = fitz.open(str(path))
         pages = []
         for page_num, page in enumerate(doc):

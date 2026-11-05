@@ -131,7 +131,10 @@ DOMAIN_PARTITIONS = {
 
 INTENT_PATTERNS = {
     Intent.EMERGENCY: [
-        "help", "urgent", "dying", "emergency", "right now",
+        # Plain "help" is everyday ("help me plan my week") — only urgent forms count
+        "help!", "please help", "need help now", "need help fast", "send help",
+        "someone help", "help me now", "help us",
+        "urgent", "dying", "emergency", "right now",
         "can't stop", "cannot stop", "won't stop", "not breathing", "no pulse",
         "getting worse", "critical", "life threatening", "unresponsive",
         "bleeding badly", "bleeding a lot", "losing blood", "turning blue",
@@ -218,6 +221,20 @@ class RoutingPlan:
     n_tier2:         int = 2       # chunks to fetch from tier 2
     n_tier3:         int = 1       # chunks to fetch from tier 3
     use_training_path: bool = False  # try first-principles derivation first
+    is_crisis:       bool = False    # suicide / self-harm wording — crisis response
+
+
+CRISIS_PATTERNS = [
+    "kill myself", "killing myself", "end my life", "ending my life", "take my own life",
+    "suicide", "suicidal", "want to die", "wanna die", "don't want to live",
+    "dont want to live", "don't want to be alive", "no reason to live", "better off dead",
+    "hurt myself", "hurting myself", "self harm", "self-harm", "cut myself",
+]
+
+
+def is_crisis(query: str) -> bool:
+    q = query.lower()
+    return any(p in q for p in CRISIS_PATTERNS)
 
 
 class IntentRouter:
@@ -229,6 +246,15 @@ class IntentRouter:
     def route(self, query: str, tab_id: str) -> RoutingPlan:
         intent = self._classify(query, tab_id)
         partition = DOMAIN_PARTITIONS.get(tab_id, DOMAIN_PARTITIONS["prometheus"])
+
+        # Crisis wording (suicide, self-harm) overrides everything, in every tab
+        if is_crisis(query):
+            return RoutingPlan(
+                intent=Intent.EMERGENCY, tab_id=tab_id,
+                tier1_domains=[], tier2_domains=[], tier3_domains=[],
+                is_strict=True, allow_discussion=False,
+                n_tier1=0, n_tier2=0, n_tier3=0, is_crisis=True,
+            )
 
         # Emergency always gets more results and strict domains
         if intent == Intent.EMERGENCY:

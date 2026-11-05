@@ -173,7 +173,8 @@ class ConfidenceScorer:
 
         return False
 
-    def format_for_prompt(self, results: List[Dict]) -> str:
+    def format_for_prompt(self, results: List[Dict], query: str = "",
+                          max_words: int = 0) -> str:
         """
         Format retrieved chunks for injection into the system prompt.
 
@@ -214,7 +215,8 @@ class ConfidenceScorer:
                 tier_note = " (from your personal documents — unverified)"
 
             header = f"[Source {i+1}: {source_label}{tier_note} — {trust}]"
-            output.append(f"{header}\n{r['content']}")
+            text = trim_passage(r["content"], query, max_words) if max_words else r["content"]
+            output.append(f"{header}\n{text}")
 
         return "\n\n---\n\n".join(output)
 
@@ -354,3 +356,65 @@ class RedundancyChecker:
             )
 
         return False, "No high-confidence sources found for this query."
+
+
+# ── Passage trimming ────────────────────────────────────────────────────────
+# Chunks are ~400 words. Sending six of them made every prompt ~3,000 tokens,
+# and a small model on a CPU has to read all of that before its first word
+# (about 3 seconds). Only the part around what was asked is needed.
+
+_STOP_WORDS = {
+    "the", "and", "for", "how", "what", "when", "where", "why", "who", "can",
+    "you", "your", "are", "was", "with", "this", "that", "from", "have", "does",
+    "into", "will", "should", "would", "could", "about", "there", "their", "them",
+}
+
+
+def trim_passage(text: str, query: str, max_words: int = 130) -> str:
+    """
+    Keep the ~max_words around the sentence that best matches the query.
+
+    Step 1: split into sentences
+    Step 2: find the sentence sharing the most words with the query
+    Step 3: grow the window one sentence at a time (after, then before)
+            until it reaches max_words
+    """
+    import re as _re
+    words = text.split()
+    if len(words) <= max_words:
+        return text
+
+    q = {w for w in _re.findall(r"[a-z0-9]+", (query or "").lower())
+         if len(w) > 2 and w not in _STOP_WORDS}
+
+    # Step 1
+    sentences = [s for s in _re.split(r"(?<=[.!?:])\s+", text) if s.strip()]
+    if len(sentences) <= 1:
+        # No punctuation (common in PDF text): window around the first query word
+        hit = next((i for i, w in enumerate(words)
+                    if _re.sub(r"[^a-z0-9]", "", w.lower()) in q), 0)
+        start = max(0, hit - max_words // 3)
+        window = words[start:start + max_words]
+        return ("… " if start else "") + " ".join(window) + (" …" if start + max_words < len(words) else "")
+
+    # Step 2
+    def score(s):
+        return len(q & set(_re.findall(r"[a-z0-9]+", s.lower())))
+    best = max(range(len(sentences)), key=lambda i: score(sentences[i]))
+
+    # Step 3
+    lo = hi = best
+    count = len(sentences[best].split())
+    while count < max_words and (lo > 0 or hi < len(sentences) - 1):
+        if hi < len(sentences) - 1:
+            hi += 1
+            count += len(sentences[hi].split())
+        if count < max_words and lo > 0:
+            lo -= 1
+            count += len(sentences[lo].split())
+    out = " ".join(sentences[lo:hi + 1])
+    out_words = out.split()
+    if len(out_words) > max_words + 40:          # one very long sentence
+        out = " ".join(out_words[:max_words + 40])
+    return ("… " if lo > 0 else "") + out + (" …" if hi < len(sentences) - 1 else "")
+

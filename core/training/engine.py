@@ -19,9 +19,9 @@ Steps (run() below):
   7. Report the result, or say why it could not be derived
 
 Statuses returned in result["status"]:
-  DERIVED            at least one method verified — show it, ask for a verdict
+  DERIVED            at least two of three methods verified — show it
   NEEDS_DATA         a local fact or number is missing — ask the user
-  NEEDS_PREREQS      parent concepts are not trained yet — fall back
+  NEEDS_TRAINING     a building block couldn't be worked out — fall back
   FOUNDATIONAL_GAP   the law itself is missing from the KB — fall back
   BLOCKED            quarantined, or no method verified — fall back
   NO_MATCH           no concept fits the question — fall back silently
@@ -276,7 +276,20 @@ class DerivationEngine:
 
     # ── Full run ───────────────────────────────────────────────────────────
 
-    def run(self, query: str, tab_id: str) -> Dict:
+    # How much one self-check moves a concept's confidence: three methods that
+    # agree count as learned (0.5 = usable as a building block); two of three
+    # count partly; one or none counts against it.
+    SELF_CHECK_GAIN = {3: 0.50, 2: 0.30, 1: 0.05, 0: -0.10}
+    MAX_RESEARCH_STEPS = 3      # building blocks worked out per question, at most
+
+    def run(self, query: str, tab_id: str, progress=None) -> Dict:
+        """
+        progress(text) is called with "Researching <topic>" as each step starts,
+        so the window can show what it's working on. No question is put to the
+        user — the three-method self-check decides what counts as learned.
+        """
+        say = progress or (lambda text: None)
+
         # Step 1: match
         concept = self.get_concept_or_request(query, tab_id)
         if not concept:
@@ -285,34 +298,60 @@ class DerivationEngine:
 
         if concept["quarantined"]:
             return {**base, "status": "BLOCKED",
-                    "reason": f"{concept['name']} is on hold after a contradiction."}
+                    "reason": f"I'm not confident about {concept['name']} yet."}
 
         # Step 2: anchors
         anchors = self._kb_anchors(concept)
-
-        # Step 3: prerequisites
-        missing = self.graph.missing_parents(concept["id"])
-        if missing:
-            names = [self.graph.get(m)["name"] for m in missing]
-            return {**base, "status": "NEEDS_PREREQS", "missing": names,
-                    "reason": "First ask me to explain: " + ", ".join(names) + "."}
-
-        # Step 4: gaps
         gap = self._classify_gap(concept, anchors, query)
         if gap and gap["kind"] == "FOUNDATIONAL_GAP":
             return {**base, "status": "FOUNDATIONAL_GAP", "missing": gap["missing"],
-                    "reason": ("The library is missing the foundation for "
-                               + ", ".join(gap["missing"])
-                               + ". Run ingest.py to index scientific_reference.")}
+                    "reason": (f"I haven't been trained on {concept['name']} yet — the law it "
+                               f"rests on isn't in the library ({', '.join(gap['missing'])}).")}
+
+        # Step 3: work out any building blocks that aren't learned yet
+        todo = self._untrained_ancestors(concept["id"])
+        if len(todo) > self.MAX_RESEARCH_STEPS:
+            names = ", ".join(self.graph.get(c)["name"] for c in todo)
+            return {**base, "status": "NEEDS_TRAINING", "missing": todo,
+                    "reason": f"I haven't been trained on {concept['name']} yet (it builds on {names})."}
+        for cid in todo:
+            node = self.graph.get(cid)
+            say(f"Researching {node['name']}")
+            sub = self._derive_and_learn(node, node["name"], tab_id)
+            if sub["status"] != "DERIVED":
+                return {**base, "status": "NEEDS_TRAINING", "missing": [cid],
+                        "reason": (f"I haven't been trained on {node['name']} yet, "
+                                   f"which {concept['name']} builds on.")}
+
+        # Step 4: numbers needed?
         if gap and gap["kind"] == "NEEDS_DATA":
             ask = ", ".join(gap["missing"])
             return {**base, "status": "NEEDS_DATA", "missing": gap["missing"],
                     "text": (f"I can work this out from first principles "
                              f"({concept['name']}), but I need the numbers first: {ask}.")}
 
-        # Steps 5–6: derive and validate
+        # Steps 5–7: the concept itself
+        say(f"Researching {concept['name']}")
+        return self._derive_and_learn(concept, query, tab_id, anchors=anchors)
+
+    def _untrained_ancestors(self, cid: str) -> List[str]:
+        """Untrained, non-quarantined ancestors, parents before children."""
+        order = self.graph._topological_order()
+        need = {a for a in self.graph.ancestors(cid) if not self.graph.is_trained(a)}
+        return [c for c in order if c in need]
+
+    def _derive_and_learn(self, concept: Dict, query: str, tab_id: str,
+                          anchors: Optional[Dict] = None) -> Dict:
+        """Derive, self-check, update trust, and return the result."""
+        base = {"concept_id": concept["id"], "concept_name": concept["name"]}
+        anchors = anchors if anchors is not None else self._kb_anchors(concept)
+        if any(a is None for a in anchors.values()):
+            return {**base, "status": "FOUNDATIONAL_GAP",
+                    "reason": f"I haven't been trained on {concept['name']} yet."}
+
         outcome = self.derive(concept, anchors, query, tab_id=tab_id)
         ok = [m for m in outcome["methods"] if m["ok"]]
+        total = len(outcome["methods"]) or NUM_METHODS
 
         self.graph.record_attempt(concept["id"], {
             "query":      query[:200],
@@ -322,28 +361,30 @@ class DerivationEngine:
             "problems":   [m["problems"] for m in outcome["methods"]],
         })
 
+        # Contradicting a law → on hold, and everything built on it trusted less
         if outcome["violations"]:
-            reason = "contradicts " + ", ".join(outcome["violations"])
-            self.graph.quarantine(concept["id"], reason)
+            self.graph.quarantine(concept["id"], "contradicts " + ", ".join(outcome["violations"]))
             return {**base, "status": "BLOCKED",
-                    "reason": f"The derivation {reason}, so {concept['name']} is on hold."}
+                    "reason": f"I couldn't work out {concept['name']} reliably yet."}
 
-        if not ok:
+        # Self-check moves trust (never asks the user)
+        gain = self.SELF_CHECK_GAIN.get(min(len(ok), 3), -0.10)
+        self.graph.apply_delta(concept["id"], gain, success=len(ok) >= 2)
+        self.graph.promote_lemma(concept["id"])   # only if it has earned it
+
+        if len(ok) < 2:
             return {**base, "status": "BLOCKED",
-                    "reason": "None of the derivations checked out."}
+                    "reason": f"I couldn't work out {concept['name']} reliably yet."}
 
-        # Step 7: present
         best = max(ok, key=lambda m: len(m["steps"]))
-        sources = sorted({a["source"] for a in anchors.values()})
         return {
             **base,
             "status":        "DERIVED",
             "methods_ok":    len(ok),
-            "methods_total": len(outcome["methods"]) or NUM_METHODS,
+            "methods_total": total,
             "result":        best["result"],
-            "anchors":       sources,
-            "text":          self._format(concept, anchors, best, len(ok),
-                                          len(outcome["methods"]) or NUM_METHODS),
+            "anchors":       sorted({a["source"] for a in anchors.values()}),
+            "text":          self._format(concept, anchors, best, len(ok), total),
         }
 
     def _format(self, concept, anchors, method, n_ok, n_total) -> str:
@@ -365,9 +406,9 @@ class DerivationEngine:
             label = own["source"].replace("_", " ").title()
             lines.append(f"Checked against the library ({label}): {concept['statement']}")
         lines.append("")
-        lines.append(f"{n_ok} of {n_total} separate methods reached this result.")
+        lines.append("Checked three separate ways — all agree." if n_ok >= n_total
+                     else f"Checked {n_total} separate ways — {n_ok} agree.")
         if concept["sample_problems"]:
             sp = concept["sample_problems"][0]
-            lines.append(f"Quick check: {sp['q']} → {sp['a']}")
-        lines.append("Is this right? Your answer is how this result earns trust.")
+            lines.append(f"Example: {sp['q']} → {sp['a']}")
         return "\n".join(lines)

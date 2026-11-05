@@ -332,6 +332,7 @@ class TabManager:
         self.tabs: List[Tab] = []
         self.active_tab_id: str = "prometheus"
         self.load()
+        self._drop_disabled()
 
     def load(self):
         """Load tabs from disk, falling back to defaults."""
@@ -364,6 +365,14 @@ class TabManager:
 
         # First run — use defaults
         self.tabs = list(DEFAULT_TABS)
+
+    def _drop_disabled(self):
+        """Hide tabs for features that are switched off (core/features.py)."""
+        from core.features import P2P_ENABLED
+        if not P2P_ENABLED:
+            self.tabs = [t for t in self.tabs if t.id != "messages"]
+        if not self.get_tab(self.active_tab_id):
+            self.active_tab_id = "prometheus"
 
     def save(self):
         os.makedirs(os.path.dirname(TABS_PATH), exist_ok=True)

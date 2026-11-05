@@ -21,6 +21,7 @@ INTENT_TEMPERATURE = {
     "plan":       0.60,
     "discuss":    0.80,   # Conversational, varied
     "reflect":    0.85,   # Warm, personal, never robotic
+    "crisis":     0.40,   # Calm and steady — not robotic, not loose
 }
 
 DEFAULT_TEMPERATURE = 0.65
@@ -30,6 +31,7 @@ class LLMEngine:
     def __init__(self, config):
         self.config = config
         self.base_url = config.ollama_url
+        self.last_stats: Dict = {}     # Ollama's timing for the last streamed reply
 
     def is_available(self) -> bool:
         """
@@ -77,6 +79,8 @@ class LLMEngine:
         """'llama3.2' matches 'llama3.2:latest'; 'llama3.2:3b' must match exactly."""
         if not wanted:
             return False
+        wanted = wanted.lower()
+        installed = [m.lower() for m in installed]
         if ":" in wanted:
             return wanted in installed
         return any(m.split(":")[0] == wanted for m in installed)
@@ -118,7 +122,9 @@ class LLMEngine:
                     {"role": "system", "content": system_prompt}
                 ] + messages,
                 "stream": True,
+                "keep_alive": self.config.keep_alive,
                 "options": {
+                    "num_ctx":     self.config.context_window,
                     "num_predict": self.config.max_tokens,
                     "temperature": temperature,
                     "top_p":       0.9,
@@ -149,6 +155,15 @@ class LLMEngine:
                                 on_token(token)
 
                             if data.get("done"):
+                                # Ollama reports where the time went (nanoseconds)
+                                ns = lambda k: int(data.get(k, 0) or 0) // 1_000_000
+                                self.last_stats = {
+                                    "load_ms":        ns("load_duration"),
+                                    "prompt_tokens":  int(data.get("prompt_eval_count", 0) or 0),
+                                    "prompt_eval_ms": ns("prompt_eval_duration"),
+                                    "gen_tokens":     int(data.get("eval_count", 0) or 0),
+                                    "gen_ms":         ns("eval_duration"),
+                                }
                                 on_done(full_response)
                                 return
 
@@ -162,6 +177,27 @@ class LLMEngine:
             )
         except Exception as e:
             on_error(f"Error: {str(e)}")
+
+    def warm_up(self, system_prompt: str = "", tab_id: str = "prometheus"):
+        """
+        Load the model and read the companion prompt once, at startup, so the
+        first real message doesn't pay for it. Ollama keeps the prompt it just
+        read, so a message that starts with the same text skips re-reading it.
+        Blocking — run it on a background thread.
+        """
+        model = self.config.model_for_tab(tab_id)
+        try:
+            requests.post(f"{self.base_url}/api/chat", json={
+                "model": model,
+                "messages": ([{"role": "system", "content": system_prompt}] if system_prompt else [])
+                            + [{"role": "user", "content": "hi"}],
+                "stream": False,
+                "keep_alive": self.config.keep_alive,
+                "options": {"num_ctx": self.config.context_window, "num_predict": 1},
+            }, timeout=120)
+            return True
+        except Exception:
+            return False
 
     def complete(
         self,
@@ -186,7 +222,9 @@ class LLMEngine:
                 {"role": "user",   "content": prompt},
             ],
             "stream": False,
+            "keep_alive": self.config.keep_alive,
             "options": {
+                "num_ctx":        self.config.context_window,
                 "num_predict":    max_tokens,
                 "temperature":    temperature,
                 "top_p":          0.9,
@@ -218,7 +256,9 @@ class LLMEngine:
                     )
                 }],
                 "stream": False,
+                "keep_alive": self.config.keep_alive,
                 "options": {
+                    "num_ctx":     self.config.context_window,
                     "num_predict": 200,
                     "temperature": 0.2,   # Very low — factual summary
                     "repeat_penalty": 1.1,

@@ -29,6 +29,11 @@ class KnowledgeBase:
         self._last_scores    = {}
         self._last_raw_chunks: List[Dict] = []
         self._last_images:   List[str] = []   # image paths from last search
+        self._last_sources:  List[str] = []   # "Book title, p. 12" for each passage used
+        # What goes into the prompt: at most this many passages, each trimmed
+        # to about this many words around the question (see trim_passage)
+        self.prompt_passages = 3
+        self.passage_words   = 130
         self._load_fallback()
 
     def _init_personal_searcher(self):
@@ -283,6 +288,7 @@ class KnowledgeBase:
                 "has_sources": False,
             }
             self._last_images = []
+            self._last_sources = []
             return (
                 "",
                 "NO SOURCES FOUND: No relevant knowledge retrieved for this query. "
@@ -328,17 +334,29 @@ class KnowledgeBase:
             "has_sources":   True,
         }
         self._last_raw_chunks = scored
-        # Collect unique image paths from top results
+        # The passages actually put in the prompt: their sources and page images
+        used = scored[:min(n_results, self.prompt_passages)]
         self._last_images = list(dict.fromkeys(
-            r["image_path"] for r in scored[:n_results]
-            if r.get("image_path")
+            r["image_path"] for r in used if r.get("image_path")
+        ))
+        self._last_sources = list(dict.fromkeys(
+            self.scorer._source_label(r.get("source", ""), r.get("domain", ""))
+            + (f", p. {r['page_num']}" if r.get("page_num") else "")
+            for r in used
         ))
 
-        context = self.scorer.format_for_prompt(scored[:n_results])
+        context = self.scorer.format_for_prompt(
+            scored[:min(n_results, self.prompt_passages)],
+            query=query, max_words=self.passage_words,
+        )
         return context, confidence_note
 
     def get_last_scores(self) -> dict:
         return self._last_scores
+
+    def get_last_sources(self) -> List[str]:
+        """Readable source names (with page) behind the last answer."""
+        return self._last_sources
 
     def get_last_images(self) -> List[str]:
         """Return image paths from the most recent search."""
@@ -398,17 +416,7 @@ class KnowledgeBase:
         domain = chunk.get("domain", "")
         source = chunk.get("source", "")
 
-        # Domains where images are extracted during ingest
-        # Must stay in sync with IMAGE_ELIGIBLE_DOMAINS in ingest.py
-        IMAGE_ELIGIBLE_DOMAINS = {
-            "plants_temperate", "plants_tropical", "plants_desert", "plants_arctic",
-            "medical", "emergency_medicine", "where_no_doctor", "where_no_dentist",
-            "blacksmithing", "electronics", "build", "navigation",
-        }
-
-        if domain not in IMAGE_ELIGIBLE_DOMAINS:
-            return None
-
+        # Ingest decides which folders get page images; if one exists, use it
         img_path = (
             Path("knowledge_base") / domain / "_images" /
             f"{source}_p{page_num:03d}.jpg"
@@ -442,11 +450,16 @@ class KnowledgeBase:
 
         scored.sort(key=lambda x: x[0], reverse=True)
 
-        return [
-            {
+        results = []
+        for _, chunk in scored[:n]:
+            r = {
                 "content": chunk["content"],
                 "source": chunk.get("source", "unknown"),
-                "domain": chunk.get("domain", "general")
+                "domain": chunk.get("domain", "general"),
+                "page_num": chunk.get("page_num", 0),
             }
-            for _, chunk in scored[:n]
-        ]
+            img = self._resolve_image(r)   # page images work without ChromaDB too
+            if img:
+                r["image_path"] = str(img)
+            results.append(r)
+        return results

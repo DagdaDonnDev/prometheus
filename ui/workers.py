@@ -49,7 +49,9 @@ class TrainingWorker(QThread):
       derivation_done(dict)     DERIVED or NEEDS_DATA — show it
       fallback_requested(dict)  use the Knowledge Path instead (result has the reason)
       derivation_error(str)     engine or Ollama failed — also falls back
+      progress(str)             "Researching <topic>" as each step starts
     """
+    progress           = Signal(str)
     derivation_done    = Signal(dict)
     fallback_requested = Signal(dict)
     derivation_error   = Signal(str)
@@ -62,7 +64,7 @@ class TrainingWorker(QThread):
 
     def run(self):
         try:
-            result = self.engine.run(self.query, self.tab_id)
+            result = self.engine.run(self.query, self.tab_id, progress=self.progress.emit)
         except Exception as e:
             self.derivation_error.emit(str(e))
             return

@@ -23,6 +23,10 @@ class Config:
 
     # Performance
     max_tokens: int = 300
+    # Same context size on every request — Ollama reloads the model when it changes
+    context_window: int = 4096
+    # Keep the model in memory between messages (Ollama's default is 5 minutes)
+    keep_alive: str = "30m"
     context_messages: int = 20
     rag_results: int = 3
     stream_tokens: bool = True
@@ -37,6 +41,10 @@ class Config:
     theme: str = "dark"
     font_size: int = 13
     show_day_counter: bool = True
+
+    # Assistant — what it's called and how it comes across (Settings → Assistant)
+    assistant_name: str = "Prometheus"
+    assistant_persona: str = ""   # e.g. "a calm old sailor who's seen a lot" — empty = plain friend
 
     # User
     user_name: Optional[str] = None

@@ -21,100 +21,88 @@ from core.platform_info import PHONE_LAYOUT
 
 class ImagePanel(QFrame):
     """
-    Collapsible panel showing page images retrieved alongside an answer.
-    Used for plant, medical, and diagram results.
+    What an answer is drawing on, shown under it — always open.
+
+    Step 1: a "From:" line naming each source (book and page)
+    Step 2: the page image of the top source, shown straight away
+    Step 3: up to two more pages as small thumbnails
+    Click any image to see it full size.
     """
 
-    def __init__(self, image_paths: List[str], parent=None):
+    MAIN_WIDTH  = 260 if PHONE_LAYOUT else 320
+    THUMB_WIDTH = 110
+
+    def __init__(self, image_paths: List[str] = None, sources: List[str] = None, parent=None):
         super().__init__(parent)
         self.setObjectName("imagePanel")
-        self._visible = False
-        self._image_paths = image_paths
+        image_paths = [p for p in (image_paths or []) if Path(p).exists()][:3]
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 8)
+        layout.setContentsMargins(8 if PHONE_LAYOUT else 40, 0, 8, 6)
         layout.setSpacing(6)
 
-        # Toggle button
-        self._toggle = QPushButton(f"📷 Show source illustrations ({len(image_paths)} page{'s' if len(image_paths) > 1 else ''})")
-        self._toggle.setObjectName("summaryBar")
-        self._toggle.setFixedHeight(26)
-        self._toggle.clicked.connect(self._toggle_images)
-        layout.addWidget(self._toggle)
+        # Step 1
+        if sources:
+            src = QLabel("From: " + " · ".join(sources))
+            src.setObjectName("timingStamp")
+            src.setWordWrap(True)
+            layout.addWidget(src)
 
-        # Image container (hidden by default)
-        self._container = QWidget()
-        self._container.hide()
-        self._container_layout = QHBoxLayout(self._container)
-        self._container_layout.setContentsMargins(0, 0, 0, 0)
-        self._container_layout.setSpacing(8)
-        self._container_layout.setAlignment(Qt.AlignLeft)
+        if not image_paths:
+            return
 
-        self._images_loaded = False
-        layout.addWidget(self._container)
+        # Step 2
+        main = self._image_label(image_paths[0], self.MAIN_WIDTH)
+        if main:
+            layout.addWidget(main, 0, Qt.AlignLeft)
 
-    def _toggle_images(self):
-        self._visible = not self._visible
-        if self._visible:
-            if not self._images_loaded:
-                self._load_images()
-            self._container.show()
-            self._toggle.setText(f"📷 Hide source illustrations")
-        else:
-            self._container.hide()
-            self._toggle.setText(
-                f"📷 Show source illustrations ({len(self._image_paths)} page{'s' if len(self._image_paths) > 1 else ''})"
-            )
+        # Step 3
+        if len(image_paths) > 1:
+            row = QHBoxLayout()
+            row.setSpacing(6)
+            for path in image_paths[1:]:
+                thumb = self._image_label(path, self.THUMB_WIDTH)
+                if thumb:
+                    row.addWidget(thumb)
+            row.addStretch()
+            layout.addLayout(row)
 
-    def _load_images(self):
-        """Load and display images (deferred until first shown)."""
-        for img_path in self._image_paths[:3]:  # max 3 images
-            if not Path(img_path).exists():
-                continue
-
-            pixmap = QPixmap(img_path)
-            if pixmap.isNull():
-                continue
-
-            # Scale to fit — max 240px wide in panel
-            pixmap = pixmap.scaledToWidth(240, Qt.SmoothTransformation)
-
-            lbl = QLabel()
-            lbl.setPixmap(pixmap)
-            lbl.setFixedSize(240, pixmap.height())
-            lbl.setCursor(Qt.PointingHandCursor)
-            lbl.setToolTip("Click to view full size")
-
-            # Click to open full size
-            path_copy = img_path
-            lbl.mousePressEvent = lambda e, p=path_copy: self._open_fullsize(p)
-
-            self._container_layout.addWidget(lbl)
-
-        self._images_loaded = True
+    def _image_label(self, img_path: str, width: int):
+        pixmap = QPixmap(img_path)
+        if pixmap.isNull():
+            return None
+        pixmap = pixmap.scaledToWidth(width, Qt.SmoothTransformation)
+        lbl = QLabel()
+        lbl.setObjectName("sourceImage")
+        lbl.setPixmap(pixmap)
+        lbl.setFixedSize(pixmap.width(), pixmap.height())
+        lbl.setCursor(Qt.PointingHandCursor)
+        lbl.setToolTip("Click to see the full page")
+        lbl.mousePressEvent = lambda e, p=img_path: self._open_fullsize(p)
+        return lbl
 
     def _open_fullsize(self, img_path: str):
-        """Open image at full resolution in a dialog."""
+        """Full page in a dark dialog, scaled to fit the screen."""
+        from PySide6.QtWidgets import QScrollArea
         dialog = QDialog(self)
-        dialog.setWindowTitle("Source illustration")
-
+        dialog.setWindowTitle("Source page")
         pixmap = QPixmap(img_path)
         if pixmap.isNull():
             return
-
-        # Scale to screen — max 900px wide
-        if pixmap.width() > 900:
-            pixmap = pixmap.scaledToWidth(900, Qt.SmoothTransformation)
+        screen = self.screen().availableGeometry() if self.screen() else None
+        max_w = min(900, (screen.width() - 80) if screen else 900)
+        if pixmap.width() > max_w:
+            pixmap = pixmap.scaledToWidth(max_w, Qt.SmoothTransformation)
 
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(8, 8, 8, 8)
-
+        scroll = QScrollArea()
         img_lbl = QLabel()
         img_lbl.setPixmap(pixmap)
-        img_lbl.setFixedSize(pixmap.width(), pixmap.height())
-        layout.addWidget(img_lbl)
-
-        dialog.setFixedSize(pixmap.width() + 16, pixmap.height() + 16)
+        scroll.setWidget(img_lbl)
+        layout.addWidget(scroll)
+        max_h = (screen.height() - 120) if screen else 900
+        dialog.resize(pixmap.width() + 40, min(pixmap.height() + 40, max_h))
         dialog.exec()
 
 
@@ -244,11 +232,13 @@ class ChatView(QWidget):
     def _hide_welcome(self):
         """The first message replaces the welcome panel."""
         if self._welcome is not None:
+            self._welcome.hide()
             self._welcome.deleteLater()
             self._welcome = None
 
     def _clear_messages(self):
         self._welcome = None
+        self.hide_researching()
         layout = self._messages_layout
         while layout.count() > 1:
             item = layout.takeAt(0)
@@ -277,7 +267,8 @@ class ChatView(QWidget):
             self._scroll_to_bottom()
 
     def finish_assistant_message(self, image_paths: List[str] = None,
-                                 first_token_ms: int = 0, response_ms: int = 0):
+                                 first_token_ms: int = 0, response_ms: int = 0,
+                                 breakdown: str = "", sources: List[str] = None):
         """
         Mark current streaming message as complete.
         If image_paths provided, attach an image panel below the bubble.
@@ -292,20 +283,52 @@ class ChatView(QWidget):
             stamp = QLabel(stamp_text)
             stamp.setObjectName("timingStamp")
             stamp.setContentsMargins(40, 0, 0, 0)
-            stamp.setToolTip("🔊 when you started hearing the reply · ✓ when it finished")
+            stamp.setToolTip(
+                "🔊 when you started hearing the reply · ✓ when it finished"
+                + (f"\n{breakdown}" if breakdown else "")
+            )
             self._messages_layout.insertWidget(
                 self._messages_layout.count() - 1, stamp
             )
         if self._current_tab and self._current_tab.summary:
             self._summary_bar.show()
 
-        # Add image panel if we have images
-        if image_paths:
-            panel = ImagePanel(image_paths)
+        # What the answer drew on: source names and page images
+        if image_paths or sources:
+            panel = ImagePanel(image_paths, sources)
             self._messages_layout.insertWidget(
                 self._messages_layout.count() - 1, panel
             )
             QTimer.singleShot(50, self._scroll_to_bottom)
+
+    def show_researching(self, text: str):
+        """
+        Small working line in the chat ("🔍 Researching voltage divider…"),
+        replaced by the answer. Dots animate so it's clearly busy.
+        """
+        self._hide_welcome()
+        if getattr(self, "_research_label", None) is None:
+            self._research_label = QLabel()
+            self._research_label.setObjectName("researchLine")
+            self._research_label.setContentsMargins(8 if PHONE_LAYOUT else 40, 4, 8, 4)
+            self._messages_layout.insertWidget(self._messages_layout.count() - 1, self._research_label)
+            self._research_dots = 0
+            self._research_timer = QTimer(self)
+            self._research_timer.timeout.connect(self._tick_researching)
+            self._research_timer.start(400)
+        self._research_text = text
+        self._tick_researching()
+        QTimer.singleShot(50, self._scroll_to_bottom)
+
+    def _tick_researching(self):
+        self._research_dots = (self._research_dots + 1) % 4
+        self._research_label.setText(f"🔍  {self._research_text}" + "." * self._research_dots)
+
+    def hide_researching(self):
+        if getattr(self, "_research_label", None) is not None:
+            self._research_timer.stop()
+            self._research_label.deleteLater()
+            self._research_label = None
 
     def add_verdict_bar(self, options: dict, on_choice):
         """

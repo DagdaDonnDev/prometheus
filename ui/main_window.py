@@ -45,7 +45,7 @@ from ui.dev_panel import DevPanel
 from core.pipeline import QueryPipeline
 from core.platform_info import PHONE_LAYOUT
 from ui.layout_helpers import size_dialog
-from core.training import TrainingGraph, DerivationEngine, TrainingSession, VERDICT_LABELS
+from core.training import TrainingGraph, DerivationEngine, TrainingSession
 
 
 class MainWindow(QMainWindow):
@@ -66,7 +66,9 @@ class MainWindow(QMainWindow):
         # Decision layers (router, gates, bounds) — shared with Android
         self.pipeline      = QueryPipeline(self.memory, self.knowledge, self.llm, self.map_engine)
         self.p2p           = P2PEngine(self.memory)
-        self.p2p.start()
+        from core.features import P2P_ENABLED
+        if P2P_ENABLED:          # off until ready — nothing listens on the network
+            self.p2p.start()
 
         # Training Path (v22) — first-principles derivation for deductive tabs
         self.training_graph   = TrainingGraph()
@@ -85,6 +87,7 @@ class MainWindow(QMainWindow):
         self._generation_id = 0   # bumped on every query and on force-stop
 
         self._setup_ui()
+        self._apply_assistant_name()
         self._setup_shortcuts()
         self._check_ollama()
         self._start_background_init()
@@ -309,7 +312,9 @@ class MainWindow(QMainWindow):
         layout.setSpacing(4)
 
         # Left: name and day
-        title = QLabel("P" if PHONE_LAYOUT else "PROMETHEUS")
+        name = (self.config.assistant_name or "Prometheus").strip()
+        title = QLabel(name[:1].upper() if PHONE_LAYOUT else name.upper())
+        self._title_label = title
         title.setObjectName("headerTitle")
         font = title.font()
         font.setPointSize(13)
@@ -425,11 +430,40 @@ class MainWindow(QMainWindow):
             return
 
         self._ollama_timer.stop()
+        self._warm_up_model()
         voice_name = self.tts.current_voice_name()
         ready = f"✓ Ready · {self.config.fast_model}"
         if voice_name and voice_name != "None":
             ready += f" · Voice: {voice_name}"
         self.status_bar.showMessage(ready, 6000)
+
+    def _apply_assistant_name(self):
+        """Header title and the companion tab use the chosen name."""
+        self.knowledge.prompt_passages = max(1, int(self.config.rag_results or 3))
+        name = (self.config.assistant_name or "Prometheus").strip()
+        self._title_label.setText(name[:1].upper() if PHONE_LAYOUT else name.upper())
+        tab = self.tab_manager.get_tab("prometheus")
+        if tab and tab.name != name:
+            tab.name = name
+            self.tab_bar.refresh()
+            if self.tab_manager.active_tab_id == "prometheus" and not self._generating:
+                self._load_tab("prometheus")
+        self._warmed = None          # the companion prompt changed — warm up again
+
+    def _warm_up_model(self):
+        """
+        Once Ollama is ready: load the model and have it read the companion
+        prompt, so the first message doesn't wait for either. Runs once per
+        model choice, on a background thread.
+        """
+        import threading
+        key = (self.llm.base_url, self.config.companion_model)
+        if getattr(self, "_warmed", None) == key:
+            return
+        self._warmed = key
+        plan = self.pipeline.route("hi", "prometheus")
+        prompt = self.pipeline._prepare_companion("hi", plan).system_prompt
+        threading.Thread(target=self.llm.warm_up, args=(prompt,), daemon=True).start()
 
     def _start_background_init(self):
         """Initialize heavy components in background after UI shown."""
@@ -588,10 +622,18 @@ class MainWindow(QMainWindow):
     def _run_training_path(self, tab: Tab, user_input: str, routing_plan, trace):
         """Derive from first principles on a worker thread (never block Qt)."""
         trace.path = "training"
-        self.status_bar.showMessage("🧮 Working it out from first principles…", 0)
         gen_id = self._generation_id
 
+        # Show what it's working on (cheap keyword match — no model call)
+        concept = self.training_engine.get_concept_or_request(user_input, tab.id)
+        if concept:
+            self.chat_view.show_researching(f"Researching {concept['name']}")
+
         self._training_worker = TrainingWorker(self.training_engine, user_input, tab.id)
+        self._training_worker.progress.connect(
+            lambda text: self.chat_view.show_researching(text)
+            if gen_id == self._generation_id else None
+        )
         self._training_worker.derivation_done.connect(
             lambda result: self._on_derivation_done(gen_id, tab, result)
         )
@@ -615,7 +657,7 @@ class MainWindow(QMainWindow):
             trace.gate_mode        = "direct"
 
         text = result.get("text", "")
-        self.status_bar.showMessage("", 0)
+        self.chat_view.hide_researching()
         self.chat_view.start_assistant_message()
         self._on_token(text)          # records speak-start and feeds the voice
         self.tts.flush()
@@ -625,19 +667,8 @@ class MainWindow(QMainWindow):
         tab.add_message("assistant", text)
         self.tab_manager.save()
 
-        # Ask for a verdict — only confirmed successes build trust
-        if result.get("status") == "DERIVED":
-            self.training_session.remember(tab.id, result)
-            self.chat_view.add_verdict_bar(
-                VERDICT_LABELS,
-                lambda verdict, tid=tab.id: self._on_verdict(tid, verdict),
-            )
+        # No verdict asked — the engine's own three-way check already set trust
         self._end_generation()
-
-    def _on_verdict(self, tab_id: str, verdict: str):
-        msg = self.training_session.apply_verdict(tab_id, verdict)
-        if msg:
-            self.status_bar.showMessage(msg, 6000)
 
     def _on_training_fallback(self, gen_id: int, tab: Tab, user_input: str,
                               routing_plan, trace, result: dict):
@@ -646,7 +677,7 @@ class MainWindow(QMainWindow):
             return
         trace.path = "knowledge"
         trace.training_status = f"fallback: {result.get('status', '')}"
-        self.status_bar.showMessage("", 0)
+        self.chat_view.hide_researching()
         note = self.pipeline.training_fallback_note(result)
         if note:
             # Shown in the chat so it isn't lost when the status bar updates
@@ -665,6 +696,8 @@ class MainWindow(QMainWindow):
         Android); this method only handles the UI and step 11 (streaming).
         """
         prepared = self.pipeline.prepare_knowledge(tab, user_input, routing_plan, trace)
+        # Images and source names belong to THIS answer (never leftovers)
+        self._answer_media = (prepared.images, prepared.sources)
 
         # Step 9: tell the user about mode and sources
         if prepared.status_text:
@@ -684,6 +717,9 @@ class MainWindow(QMainWindow):
 
         # Step 11: stream the response (tokens go to the chat and the voice)
         messages = self.context_mgr.prepare_messages(tab)
+        import time as _time
+        trace.prep_ms = int((_time.time() - trace.timestamp) * 1000)
+        self.llm.last_stats = {}
         self.chat_view.start_assistant_message()
 
         self._llm_worker = LLMWorker(
@@ -710,7 +746,8 @@ class MainWindow(QMainWindow):
         tracer.finish(response, self.config.model_for_tab(tab.id))
         if not trace:
             return {}
-        return {"first_token_ms": trace.first_token_ms, "response_ms": trace.response_ms}
+        return {"first_token_ms": trace.first_token_ms, "response_ms": trace.response_ms,
+                "breakdown": trace.breakdown()}
 
     def _end_generation(self):
         self._generating = False
@@ -718,10 +755,15 @@ class MainWindow(QMainWindow):
 
     def _on_response_done(self, tab: Tab, full_response: str):
         self.tts.flush()
-        images = self.knowledge.get_last_images()
+        trace = tracer.get_current()
+        if trace and self.llm.last_stats:
+            for k, v in self.llm.last_stats.items():
+                setattr(trace, k, v)
+        images, sources = getattr(self, "_answer_media", ([], []))
+        self._answer_media = ([], [])
         timing = self._finish_trace(full_response, tab)
         self.chat_view.finish_assistant_message(
-            image_paths=images if images else None, **timing
+            image_paths=images or None, sources=sources or None, **timing
         )
         tab.add_message("assistant", full_response)
         if self.context_mgr.should_summarize(tab):
@@ -794,6 +836,7 @@ class MainWindow(QMainWindow):
         self.tts.stop()
 
         # Finish any open bubble cleanly
+        self.chat_view.hide_researching()
         self.chat_view.finish_assistant_message()
 
         # Reset generation state
@@ -966,6 +1009,7 @@ class MainWindow(QMainWindow):
         self.memory.save()
         self.config.save()
         # Apply changes now — no restart needed
+        self._apply_assistant_name()
         self.llm.base_url = self.config.ollama_url.rstrip("/")
         self._check_ollama()
         if self.config.tts_voice:

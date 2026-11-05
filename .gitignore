@@ -27,3 +27,6 @@ pysidedeploy.spec
 deployment/
 wheels/
 .pyside6_android_deploy/
+
+# debug_run.bat output
+logs/

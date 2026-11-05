@@ -112,7 +112,7 @@ class TraceRow(QFrame):
         f.setBold(True)
         speak_lbl.setFont(f)
         speak_lbl.setFixedWidth(78)
-        speak_lbl.setToolTip("Speak-start: when the first words reached the voice")
+        speak_lbl.setToolTip("Speak-start: when the first words reached the voice\n" + trace.breakdown())
         layout.addWidget(speak_lbl)
 
         done_lbl = QLabel(f"✓ {trace.response_ms}ms")
@@ -346,6 +346,8 @@ class DevPanel(QWidget):
                 ("Slow speak-start >800ms", "slow_speak_start_rate", "%", True),
                 ("✓ Avg full response",  "avg_response_ms",     "ms",  False),
                 ("Training Path rate",   "training_path_rate",  "%",   False),
+                ("Avg prompt size",      "avg_prompt_tokens",   "tok", False),
+                ("Avg model load",       "avg_load_ms",         "ms",  False),
                 ("Safe mode rate",       "safe_mode_rate",      "%",   True),
                 ("Clarify rate",         "clarify_rate",        "%",   False),
                 ("No sources rate",      "no_sources_rate",     "%",   True),
@@ -361,6 +363,8 @@ class DevPanel(QWidget):
                 val = patterns.get(key, 0)
                 if unit == "%":
                     display = f"{val*100:.1f}%"
+                elif unit == "tok":
+                    display = f"{val:.0f} tokens"
                 elif unit == "pct":          # already 0–100, not a fraction
                     display = f"{val:.1f}%"
                 elif unit == "ms":
@@ -378,6 +382,15 @@ class DevPanel(QWidget):
                     flag = " ⚠ slow — conversations will feel laggy"
 
                 lines.append(f"  {label:<25} {display}{flag}")
+
+            # Where the last reply's wait came from
+            recent = tracer.recent_traces(1)
+            if recent:
+                lines.append("")
+                lines.append("LAST REPLY — where the time to the first word went")
+                lines.append("  " + recent[-1].breakdown())
+                lines.append("  (model load > 0 means the model wasn't in memory; a long 'reading")
+                lines.append("   prompt' means the prompt was big for this model on this machine)")
 
             self._patterns_text.setPlainText("\n".join(lines))
 
