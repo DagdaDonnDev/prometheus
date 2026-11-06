@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QFrame, QSizePolicy, QDialog,
     QLineEdit, QComboBox, QMessageBox
 )
-from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSize
+from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSize, QObject
 from PySide6.QtGui import QFont, QKeySequence, QShortcut
 
 from core.config import Config
@@ -303,8 +303,18 @@ class MainWindow(QMainWindow):
         # Input bar
         self.input_bar = InputBar(self.stt)
         self.input_bar.message_submitted.connect(self._on_send)
-        self.input_bar.voice_toggled.connect(self._on_voice_toggle)
+        self.input_bar.mic_clicked.connect(self._on_mic_clicked)
+        self.input_bar.talk_started.connect(self._start_push_to_talk)
+        self.input_bar.talk_finished.connect(lambda: self.stt.finish_listening())
         self.input_bar.stop_requested.connect(self._force_stop)
+        # Voice: words heard on a background thread come back here
+        self._voice_mode = False          # back-and-forth voice conversation
+        self._heard = _HeardBridge()
+        self._heard.heard.connect(self._on_heard)
+        self._speech_timer = QTimer(self)
+        self._speech_timer.setInterval(120)
+        self._speech_timer.timeout.connect(self._voice_tick)
+        self._speech_timer.start()
         self.input_bar.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         main_layout.addWidget(self.input_bar)
 
@@ -813,6 +823,7 @@ class MainWindow(QMainWindow):
           Training Path  — deductive tabs, explain/assess intents (derive it)
           Knowledge Path — everything else (look it up, 11 steps)
         """
+        self.tts.begin_reply()
         self._generating = True
         self._generation_id += 1
         self.input_bar.set_generating(True)
@@ -1008,15 +1019,87 @@ class MainWindow(QMainWindow):
         self.chat_view.add_error(error)
         self._end_generation()
 
-    def _on_voice_toggle(self, recording: bool):
-        if recording:
-            self.stt.start_recording()
-            self.status_bar.showMessage("🎤 Listening...", 0)
+    # ── Voice: stop button, hold-to-talk, voice conversation ──────────────
+
+    def _on_mic_clicked(self):
+        """
+        The mic button:
+          while the voice is talking → stop it (a black square)
+          in a voice conversation    → end the conversation
+          otherwise                  → start one
+        """
+        if self.tts.is_speaking():
+            self._stop_speaking()
+        elif self._voice_mode:
+            self._end_voice_mode()
+        elif not self.input_bar.voice_ok():
+            self.status_bar.showMessage(self.stt.error or "Voice input isn't set up — run: python setup_voice.py", 6000)
         else:
-            text = self.stt.stop_recording()
-            self.status_bar.showMessage("", 0)
-            if text:
-                self.input_bar.set_text(text)
+            self._voice_mode = True
+            self.status_bar.showMessage("Voice conversation on — just talk. Click the mic to end it.", 6000)
+
+    def _end_voice_mode(self):
+        self._voice_mode = False
+        if self.stt.listening:
+            self.stt.cancel_listening()
+        self.status_bar.showMessage("Voice conversation off", 3000)
+
+    def _start_push_to_talk(self):
+        """Send button held: listen until it's let go."""
+        if self._voice_mode and self.stt.listening:
+            self.stt.cancel_listening()
+        self.tts.stop()
+        if self.stt.listen(lambda text: self._heard.heard.emit(text, False), auto_stop=False):
+            self.status_bar.showMessage("Listening — let go to send", 0)
+        else:
+            self.status_bar.showMessage(self.stt.error or "Couldn't open the microphone", 6000)
+
+    def _voice_tick(self):
+        """
+        Runs every 120 ms.
+
+        Step 1: the mic button's look (black square while the voice talks)
+        Step 2: in a voice conversation, keep the mic open — even while it
+                talks or writes, so you can interrupt
+        Step 3: you started talking over it → stop the voice and the reply;
+                what you say is sent when you pause
+        """
+        speaking = self.tts.is_speaking()
+        # Step 1
+        self.input_bar.set_mic_mode("speaking" if speaking else
+                                    "listening" if self._voice_mode else "idle")
+        if not self._voice_mode:
+            return
+        busy = speaking or self._generating
+        # Step 2
+        if not self.stt.listening and not self.stt.transcribing:
+            if self.stt.listen(lambda text: self._heard.heard.emit(text, True), auto_stop=True):
+                if not busy:
+                    self.status_bar.showMessage("Listening…", 0)
+            else:
+                self._voice_mode = False
+                self.status_bar.showMessage(self.stt.error or "Couldn't open the microphone", 6000)
+                return
+        self.stt.set_strict(busy)
+        # Step 3
+        if busy and self.stt.heard_speech():
+            if self._generating:
+                self._force_stop(keep_voice_mode=True)
+            self.tts.stop()
+            self.status_bar.showMessage("Listening…", 0)
+
+    def _on_heard(self, text: str, voice_mode: bool):
+        """Words came back from Whisper → send them."""
+        if not text:
+            if not voice_mode:
+                self.status_bar.showMessage("Didn't catch that", 3000)
+            return
+        if voice_mode and not self._voice_mode:
+            return                      # conversation ended while it was working
+        if self._generating:
+            self._force_stop(keep_voice_mode=True)
+        self.status_bar.showMessage("", 0)
+        self._on_send(text)
 
     def _show_quick_access(self):
         """Show quick access panel as overlay dialog."""
@@ -1039,7 +1122,12 @@ class MainWindow(QMainWindow):
         layout.addWidget(quick)
         dialog.exec()
 
-    def _force_stop(self):
+    def _stop_speaking(self):
+        """Cut the voice now. A reply still being written carries on silently."""
+        self.tts.hush(reply_still_coming=self._generating)
+        self.input_bar.set_mic_mode("listening" if self._voice_mode else "idle")
+
+    def _force_stop(self, keep_voice_mode: bool = False):
         """
         Force-stop any current generation immediately.
         Resets all state. Used when model is stuck or
@@ -1050,6 +1138,9 @@ class MainWindow(QMainWindow):
             self._stop_editing()
             self.input_bar.clear_input()
             return
+        # Esc / ⏹ also ends a voice conversation (talking over it doesn't)
+        if not keep_voice_mode and getattr(self, "_voice_mode", False):
+            self._end_voice_mode()
         # Ignore any late signals from the stopped query
         self._generation_id += 1
 
@@ -1285,6 +1376,11 @@ class MainWindow(QMainWindow):
         # Silent backup on every close
         self.backup.backup(label=f"day{self.memory.data['user']['day_count']}")
         event.accept()
+
+
+class _HeardBridge(QObject):
+    """Carries Whisper's result from its background thread to the window."""
+    heard = Signal(str, bool)      # text, came from voice conversation
 
 
 class NewTabDialog(QDialog):

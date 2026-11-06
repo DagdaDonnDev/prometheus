@@ -284,14 +284,29 @@ QTextEdit:focus { border: 1px solid #5a4a20; }
     border: 1px solid #2b2b2b;
     border-radius: 10px;
     font-size: 17px;
+    padding: 0;
 }
 #voiceBtn:hover { color: #ececec; border-color: #3a3a3a; }
-#voiceBtn:checked {
+/* Voice conversation on: listening */
+#voiceBtn[mode="listening"] {
     background-color: #5a0f0f;
     color: #fff;
     border: 1px solid #a22;
 }
-#voiceBtn:disabled { color: #444; border-color: #222; }
+/* The voice is talking: a black square on a light button — press to stop */
+#voiceBtn[mode="speaking"] {
+    background-color: #ececec;
+    border: 1px solid #ececec;
+}
+#voiceBtn[mode="speaking"]:hover { background-color: #ffffff; }
+/* Voice input not set up (stopping the voice still works) */
+#voiceBtn[off="true"][mode="idle"] { color: #444; border-color: #222; }
+/* Send button held down to talk */
+#sendBtn[talking="true"] {
+    background-color: #5a0f0f;
+    color: #fff;
+    border: 1px solid #a22;
+}
 
 /* ── Sidebar ──────────────────────────────────────────────── */
 #sidebar {

@@ -254,6 +254,10 @@ _ASK_PATTERNS = [
     # verbs that only make sense for a specific thing: lower case is fine after these
     (r"\b(?:have you|did you|ever|you)\s+(?:seen|watched|read|heard of|heard|played|listened to)\s+(.+)", False),
     (r"\bheard of\s+(.+)", False),
+    # "do you know about bt 7274", "tell me what you know of titanfall 2" — only
+    # counts if what follows is Capitalised, "quoted" or has a number in it
+    (r"\b(?:do you know|what do you know|what you know|you know anything|know anything)\s+(?:about|of)\s+(.+)",
+     "named"),
     (r"\b(?:the|that|this)\s+" + _MEDIA_WORDS + r"\s+(?:called|named)?\s*(.+)", False),
     # vaguer lead-ins: only if what follows is Capitalised or "quoted"
     (r"\b(?:what do you think (?:of|about)|thoughts on|tell me about|do you know|"
@@ -285,7 +289,8 @@ def asked_about(text: str) -> str:
             continue
         if needs_capital:
             quoted = re.search(r"[\"“']" + re.escape(thing) + r"[\"”']", text)
-            if not (thing[:1].isupper() or quoted):
+            numbered = needs_capital == "named" and re.search(r"\d", thing)
+            if not (thing[:1].isupper() or quoted or numbered):
                 continue
         return thing
     return ""

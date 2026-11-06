@@ -89,6 +89,10 @@ class TestWiki(unittest.TestCase):
             "have you seen it?": "",
             "what's up": "",
             "tell me about fire": "",       # lower case, vague lead-in → not a named thing
+            "hey do you know about bt 7274": "bt 7274",                 # a number makes it a name
+            "tell me what you know of titanfall 2": "titanfall 2",
+            "do you know about cooking": "",
+            "why dont you tell me what you know": "",
         }
         for text, want in cases.items():
             self.assertEqual(w.asked_about(text), want, text)

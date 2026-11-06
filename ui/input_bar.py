@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QFrame, QSizePolicy
 )
 from PySide6.QtCore import Signal, Qt, QSize
-from PySide6.QtGui import QKeyEvent, QTextCursor
+from PySide6.QtGui import QKeyEvent, QTextCursor, QIcon, QCursor
 
 from core.stt import STTEngine
 
@@ -80,14 +80,17 @@ class ExpandingTextEdit(QTextEdit):
 
 class InputBar(QFrame):
     message_submitted = Signal(str)
-    voice_toggled = Signal(bool)
     stop_requested = Signal()       # emitted when user hits stop during generation
+    mic_clicked = Signal()          # stop the voice, or switch voice conversation on/off
+    talk_started = Signal()         # send button held down: start listening
+    talk_finished = Signal()        # …and let go: send what was said
 
     def __init__(self, stt: STTEngine, parent=None):
         super().__init__(parent)
         self.stt = stt
-        self._recording = False
         self._generating = False
+        self._talking = False           # send button is being held to talk
+        self._mic_mode = "idle"
 
         self.setObjectName("inputBar")
         self.setFrameShape(QFrame.NoFrame)
@@ -112,31 +115,96 @@ class InputBar(QFrame):
         self._text.submit_requested.connect(self.submit)
         layout.addWidget(self._text)
 
-        # Voice button
+        # Mic button — three looks (set_mic_mode):
+        #   idle       🎤  click: start a voice conversation
+        #   listening  🎤 on a red fill: in a voice conversation; click to end it
+        #   speaking   a black square: the voice is talking; click to stop it
         self._voice_btn = QPushButton("🎤")
         self._voice_btn.setObjectName("voiceBtn")
         self._voice_btn.setFixedSize(44, 44)
-        self._voice_btn.setCheckable(True)
-        self._voice_btn.setToolTip("Hold to speak")
-        self._voice_btn.clicked.connect(self._on_voice_click)
+        self._voice_btn.clicked.connect(self.mic_clicked.emit)
         layout.addWidget(self._voice_btn)
 
-        # Send / Stop button
+        # Send / Stop button. Click = send. Hold (⅓ s) = talk; let go = send it.
         self._send_btn = QPushButton("➤")
         self._send_btn.setObjectName("sendBtn")
         self._send_btn.setFixedSize(44, 44)
-        self._send_btn.clicked.connect(self._on_send_or_stop)
+        self._send_btn.pressed.connect(self._send_pressed)
+        self._send_btn.released.connect(self._send_released)
         layout.addWidget(self._send_btn)
+        from PySide6.QtCore import QTimer
+        self._hold_timer = QTimer(self)
+        self._hold_timer.setSingleShot(True)
+        self._hold_timer.setInterval(350)
+        self._hold_timer.timeout.connect(self._start_talking)
 
         # Voice input starts off; speech recognition loads in the background
         # and set_voice_available() turns the button on when it's ready
         self.set_voice_available(stt.available, getattr(stt, "error", "") or "Loading speech recognition…")
 
+    def set_mic_mode(self, mode: str):
+        """'idle', 'listening' (voice conversation on) or 'speaking' (voice talking)."""
+        if mode == self._mic_mode:
+            return
+        self._mic_mode = mode
+        b = self._voice_btn
+        if mode == "speaking":
+            b.setText("")
+            b.setIcon(_square_icon())
+            b.setToolTip("Stop talking (Esc)")
+        else:
+            b.setIcon(QIcon())
+            b.setText("🎤")
+            b.setToolTip("Listening — talk, then pause. Click to end the voice conversation"
+                         if mode == "listening" else
+                         "Voice conversation: talk, it answers, then listens again.\n"
+                         "Or hold the send button to say one thing.")
+        b.setProperty("mode", mode)
+        b.style().unpolish(b)
+        b.style().polish(b)
+
     def set_voice_available(self, available: bool, reason: str = ""):
-        """Turn the mic button on or off (reason = tooltip when off)."""
-        self._voice_btn.setEnabled(available)
-        self._voice_btn.setToolTip("Hold to speak" if available else
-                                   (reason or "Voice input isn't set up — run: python setup_voice.py"))
+        """Turn voice input on or off (reason = tooltip when off). Stopping the voice always works."""
+        self._voice_ok = available
+        self._voice_btn.setEnabled(True)
+        if not available and self._mic_mode != "speaking":
+            self._voice_btn.setToolTip(reason or "Voice input isn't set up — run: python setup_voice.py")
+        self._voice_btn.setProperty("off", not available)
+        self._voice_btn.style().unpolish(self._voice_btn)
+        self._voice_btn.style().polish(self._voice_btn)
+
+    def voice_ok(self) -> bool:
+        return getattr(self, "_voice_ok", False)
+
+    # ── Send button: click to send, hold to talk ──────────────────────────
+
+    def _send_pressed(self):
+        if not self._generating and self.voice_ok():
+            self._hold_timer.start()
+
+    def _start_talking(self):
+        if self._send_btn.isDown() and not self._generating:
+            self._talking = True
+            self._send_btn.setText("●")
+            self._send_btn.setToolTip("Listening — let go to send")
+            self._send_btn.setProperty("talking", True)
+            self._send_btn.style().unpolish(self._send_btn)
+            self._send_btn.style().polish(self._send_btn)
+            self.talk_started.emit()
+
+    def _send_released(self):
+        self._hold_timer.stop()
+        if self._talking:
+            self._talking = False
+            self._send_btn.setText("➤")
+            self._send_btn.setToolTip("Send (hold to talk)")
+            self._send_btn.setProperty("talking", False)
+            self._send_btn.style().unpolish(self._send_btn)
+            self._send_btn.style().polish(self._send_btn)
+            self.talk_finished.emit()
+        elif self._send_btn.rect().contains(self._send_btn.mapFromGlobal(QCursor.pos())) \
+                or not self.underMouse():
+            self._on_send_or_stop()
 
     def _on_send_or_stop(self):
         if self._generating:
@@ -181,13 +249,13 @@ class InputBar(QFrame):
         self._send_btn.setText("⏹" if generating else "➤")
         self._send_btn.setToolTip("Stop generation" if generating else "Send")
 
-    def _on_voice_click(self, checked: bool):
-        self._recording = checked
-        self.voice_toggled.emit(checked)
 
-        if checked:
-            self._voice_btn.setText("⏹")
-            self._voice_btn.setToolTip("Stop recording")
-        else:
-            self._voice_btn.setText("🎤")
-            self._voice_btn.setToolTip("Hold to speak")
+def _square_icon():
+    """A filled black square on the light 'speaking' button — the stop sign."""
+    from PySide6.QtGui import QPixmap, QPainter, QColor
+    pix = QPixmap(32, 32)
+    pix.fill(QColor(0, 0, 0, 0))
+    p = QPainter(pix)
+    p.fillRect(7, 7, 18, 18, QColor("#111111"))
+    p.end()
+    return QIcon(pix)

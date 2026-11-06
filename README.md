@@ -131,10 +131,37 @@ replies are spoken in whole sentences, and the next sentence is made while
 the current one plays, so there are no gaps. The first piece can end at a
 comma so the voice starts quickly. Markdown (`**`, `#`, bullets) isn't read
 out. Playback uses Windows' built-in sound on Windows, and `aplay`/`paplay`
-(Linux) or `afplay` (macOS) elsewhere. Escape / ⏹ cuts speech immediately.
+(Linux) or `afplay` (macOS) elsewhere.
 
-The 🎤 button turns on once speech recognition has loaded; hover it to see
-why if it stays off.
+**Talking to it**
+
+| Do | What happens |
+|----|-------------|
+| **Hold the send button** ➤ | It listens while you hold (the button turns red ●). Let go and what you said is sent |
+| **Click the 🎤** | Voice conversation: it listens (🎤 turns red), sends when you pause, speaks the reply, then listens again. Click 🎤 again to end it |
+| **While it's talking** | The 🎤 becomes a **black square**: click it to stop the voice (the reply text still finishes) |
+| **Talk over it** (in a voice conversation) | It stops talking and listens. While it's talking you need to be clearly louder than its voice for a moment, so its own sound from your speakers doesn't count. Headphones make this most reliable |
+| **Escape / ⏹** | Stops the voice and the reply, and ends a voice conversation |
+
+It decides you've finished when you've been quiet for about a second. The
+first third of a second sets the room's noise level, so a fan or traffic
+doesn't count as talking.
+
+**Whisper model size** (Settings → Voice → Whisper model) — the listening
+model, not the voice:
+
+| Size | Download | Speed on a CPU | Accuracy |
+|------|----------|----------------|----------|
+| tiny | ~75 MB | fastest (well under a second for a short sentence) | fine for clear speech in a quiet room; trips on accents, noise, names |
+| base | ~145 MB | about 2× slower than tiny | noticeably fewer mistakes — the best all-round pick |
+| small | ~485 MB | about 4× slower than base | good with accents and background noise |
+| medium | ~1.5 GB | slow on a CPU (several seconds) | best, but too slow to feel like a conversation without a GPU |
+
+After changing it, run `python setup_voice.py` once to download that size
+for offline use.
+
+Voice input works once speech recognition has loaded; hover the 🎤 to see why
+if it doesn't.
 
 ---
 
@@ -362,6 +389,9 @@ short and direct when you're annoyed, quiet when you're low, into it when
 you're excited. "mhm" is a valid reply. When corrected it says "my mistake" and
 moves on. If you ask about a film, book or person it has no article on, it says
 so ("I don't have The Juror in my database") instead of making something up.
+That holds through follow-ups that don't repeat the name ("go into the lore",
+"tell me more", "their missions") until you change the subject. When it does
+have an article, it's told that's all it has, and to say so rather than fill in.
 
 ### What it remembers about you
 When you mention something about yourself — "my sister Kate", "my dog is

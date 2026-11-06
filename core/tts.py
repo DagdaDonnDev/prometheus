@@ -132,6 +132,9 @@ class TTSEngine:
         self._generation   = 0
         self._player: Optional[subprocess.Popen] = None
         self._piper = _PiperProcess(self.voice_manager)
+        self._busy = 0          # pieces being made or played right now
+        self._busy_lock = threading.Lock()
+        self._muted = False     # "Stop speaking" pressed: silent until the next reply
 
         self.available = self.voice_manager.piper_available()
 
@@ -174,11 +177,15 @@ class TTSEngine:
                 self._warm_up()
                 continue
             if gen == self._generation:          # skip speech queued before a stop
-                path = self._synth(text)
-                if path and gen == self._generation:
-                    self._play_queue.put((gen, path))
-                elif path:
-                    _remove(path)
+                self._count(+1)
+                try:
+                    path = self._synth(text)
+                    if path and gen == self._generation:
+                        self._play_queue.put((gen, path))
+                    elif path:
+                        _remove(path)
+                finally:
+                    self._count(-1)
 
     def _player_loop(self):
         """Step 3: play the wavs in order."""
@@ -190,13 +197,19 @@ class TTSEngine:
             if item is None:
                 break
             gen, path = item
+            self._count(+1)
             try:
                 if gen == self._generation:
                     self._play(path, gen)
             except Exception:
                 pass
             finally:
+                self._count(-1)
                 _remove(path)
+
+    def _count(self, delta: int):
+        with self._busy_lock:
+            self._busy += delta
 
     def _warm_up(self):
         path = self._synth("Ready.")
@@ -263,7 +276,7 @@ class TTSEngine:
 
     def on_token(self, token: str):
         """Called for each token from LLM stream. Buffers until natural boundary."""
-        if not self.available or not self.enabled or not self._active_voice:
+        if not self.available or not self.enabled or not self._active_voice or self._muted:
             return
 
         self._token_buffer += token
@@ -277,6 +290,11 @@ class TTSEngine:
 
     def flush(self):
         """Speak any remaining buffered text (end of a reply)."""
+        if self._muted:                         # this reply was hushed; the next one speaks
+            self._muted = False
+            self._token_buffer = ""
+            self._pieces_this_reply = 0
+            return
         if self._token_buffer.strip():
             self._speak_queue.put((self._generation, self._token_buffer.strip()))
         self._token_buffer = ""
@@ -329,6 +347,11 @@ class TTSEngine:
 
     # ── Control ────────────────────────────────────────────────────────────
 
+    def is_speaking(self) -> bool:
+        """True while anything is queued, being made, or playing (drives the stop button)."""
+        queued = [item for item in list(self._speak_queue.queue) if item and item[1] is not None]
+        return bool(queued) or not self._play_queue.empty() or self._busy > 0
+
     def stop(self):
         """Stop all speech immediately."""
         while not self._speak_queue.empty():
@@ -343,6 +366,7 @@ class TTSEngine:
                 break
         self._token_buffer = ""
         self._pieces_this_reply = 0
+        self._muted = False
         # Drop anything queued or being synthesised, and cut the current sound.
         # Only Prometheus's own player is stopped (pkill used to stop every
         # aplay on the machine).
@@ -353,6 +377,17 @@ class TTSEngine:
                 player.terminate()
             except Exception:
                 pass
+
+    def begin_reply(self):
+        """A new reply is starting — speak it, even if the last one was hushed."""
+        self._muted = False
+        self._token_buffer = ""
+        self._pieces_this_reply = 0
+
+    def hush(self, reply_still_coming: bool):
+        """Stop speaking button: cut the voice, and stay quiet for the rest of this reply."""
+        self.stop()
+        self._muted = reply_still_coming
 
     def set_enabled(self, enabled: bool):
         self.enabled = enabled

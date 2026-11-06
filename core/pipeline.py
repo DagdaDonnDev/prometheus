@@ -22,6 +22,7 @@ Flow for every query:
     Step 11 (streaming + voice) is done by the front end.
 """
 
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
@@ -358,13 +359,21 @@ class QueryPipeline:
             parts.append("From their own notes (they wrote this):\n" +
                          "\n\n".join(f"{t}: {b}" for t, b in own))
 
-        # Step 4 — or, if they named something we have nothing on, say so
-        wiki_notes, sources = self._wikipedia_background(user_input)
+        # Step 4 — what Wikipedia has on the thing being talked about, or, if
+        # it's something we have nothing on, say so. A follow-up that doesn't
+        # name it ("go into the lore", "their missions") keeps the subject
+        # from the last few messages — that's where the made-up lore came from.
+        subject = self._subject_text(tab, user_input) if not own else user_input
+        carried = subject != user_input
+        wiki_notes, sources = self._wikipedia_background(subject)
         sources = [f"Obsidian — {t}" for t, _ in own] + sources
         if wiki_notes:
-            parts.append(wiki_notes)
+            parts.append(("Earlier in this chat they asked about this — use it only if they "
+                          "still are.\n" if carried else "") + wiki_notes)
         elif not own:
-            missing = self._not_in_library_note(user_input)
+            missing = self._not_in_library_note(subject)
+            if missing and carried:
+                missing = "If they're still on the same subject — " + missing
             if missing:
                 parts.append(missing)
 
@@ -387,6 +396,41 @@ class QueryPipeline:
             status_text="",
             sources=sources,
         )
+
+    @staticmethod
+    def _subject_text(tab, user_input: str) -> str:
+        """
+        The message that names what's being talked about.
+
+        Step 1: the current message, if it names something (an article, or a
+                specific thing we don't have)
+        Step 2: otherwise, if it reads like a continuation (short, "more",
+                "it/they/their", "lore"…), the newest of the last 4 messages
+                that did name something
+        Step 3: otherwise the current message (a new topic)
+        """
+        from core.wiki_lookup import asked_about, find_articles
+        # Step 1
+        if find_articles(user_input, max_articles=1) or asked_about(user_input):
+            return user_input
+        # Step 2 — "anyway…", "how was your day" start something new
+        q = user_input.lower()
+        if re.match(r"(anyway|anyways|by the way|btw|different question|new question|"
+                    r"forget that|never ?mind|how are you|how was your|how's your|good morning|"
+                    r"good night|hey|hi|hello)\b", q):
+            return user_input
+        continuing = (len(q.split()) <= 8 or is_follow_up(user_input) or re.search(
+            r"\b(more|it|its|it's|they|them|their|he|his|she|her|that|this|those|lore|story|"
+            r"plot|ending|character|characters|details?|history)\b", q))
+        if continuing and tab is not None:
+            users = [m["content"] for m in getattr(tab, "history", []) if m.get("role") == "user"]
+            if users and users[-1].strip() == user_input.strip():
+                users = users[:-1]
+            for earlier in reversed(users[-4:]):
+                if find_articles(earlier, max_articles=1) or asked_about(earlier):
+                    return earlier
+        # Step 3
+        return user_input
 
     @staticmethod
     def _not_in_library_note(user_input: str) -> str:
@@ -414,7 +458,9 @@ class QueryPipeline:
             return "", []
         notes = [f"{title}: {lead(path, words)}" for title, path in found]
         text = ("What Wikipedia says (use it for facts; talk about it in your own words):\n"
-                + "\n\n".join(notes))
+                + "\n\n".join(notes) +
+                "\nThat is ALL your library has on this. If they ask for more than it says "
+                "(lore, plot, names, events), say that's all you've got on it — never fill in.")
         return text, [f"Wikipedia — {title}" for title, _ in found]
 
     def _map_context(self) -> str:

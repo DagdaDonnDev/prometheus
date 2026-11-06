@@ -129,6 +129,10 @@ Decision layers live in `core/pipeline.py` (`QueryPipeline`, no Qt). The window 
   The model can't read tone itself (owner: "too friendly, like an actor").
 - Missing things: `wiki_lookup.asked_about` (specific named thing) + no article →
   "NOT IN YOUR LIBRARY: … say 'I don't have X in my database'". Errs toward not firing.
+  "do/what you know about|of X" counts if X is Capitalised, quoted or has a digit ("bt 7274").
+  `pipeline._subject_text`: a follow-up that names nothing (≤8 words, "more/their/lore"…) uses the
+  newest of the last 4 user messages that did — article or missing note, marked "if they're still
+  on the same subject"; "anyway/how was your/hi…" starts fresh. Wiki note ends "that is ALL…".
 - Messages: Up/Down recall in `ExpandingTextEdit`; bubbles carry `.msg` (tab-history dict, by
   identity) → ⋯/right-click actions copy/edit/retry/delete handled in `MainWindow._on_message_action`.
   Edit + send deletes from that message on, then sends. Esc cancels an edit when idle.
@@ -181,6 +185,17 @@ Decision layers live in `core/pipeline.py` (`QueryPipeline`, no Qt). The window 
   the wav path per line), synth thread + player thread (next sentence made while one plays),
   warm-up at start. Cuts at sentence ends; first piece may end at a comma (>25 chars); >220 chars
   cut anywhere. `clean_for_speech` strips markdown. Measured: gaps 1.6 s → 0, first sound 0.45 → 0.24 s.
+- Mic button (`InputBar.set_mic_mode`): idle 🎤 → click starts voice conversation; listening (red)
+  → click ends it; speaking (light button, painted black square) → click = `tts.hush(reply_still_coming)`
+  (mutes rest of that reply; `begin_reply()`/`stop()` unmute). Send button: click sends, hold 350 ms
+  = push-to-talk (`talk_started`/`talk_finished` → `stt.listen(auto_stop=False)`/`finish_listening`).
+- `MainWindow._voice_tick` (120 ms): sets the mic look; in voice mode keeps `stt.listen(auto_stop=True)`
+  open even while speaking/generating, `stt.set_strict(busy)`; `heard_speech()` while busy →
+  `_force_stop(keep_voice_mode=True)` + `tts.stop()` (barge-in). Results come back via `_HeardBridge`
+  (Qt signal from Whisper's thread) → `_on_send`. Esc ends voice mode.
+- `core/stt.SpeechDetector`: 0.3 s noise calibration, loud = >3× noise (strict: 5×, 2× floor, 0.4 s),
+  done after 0.9 s quiet; `start_block` (0.3 s lead-in) trims echo/room before speech; only ~1 s kept
+  while waiting. `transcribe_samples` feeds numpy straight to Whisper (vad_filter) on a thread.
 - Sandbox: GitHub reachable (Piper + rhasspy/piper etc/test_voice.onnx), Hugging Face blocked.
 
 ## Icon

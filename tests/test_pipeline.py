@@ -83,6 +83,23 @@ class TestPipeline(unittest.TestCase):
         finally:
             self.pipe.memory.data = saved
 
+    def test_missing_subject_carries_to_follow_ups(self):
+        # From the owner's log: the model invented Titanfall lore on follow-ups
+        from unittest import mock
+        from core.tabs import Tab
+        tab = Tab(id="prometheus", name="Chat", icon="", domains=[], system_prompt="")
+        seen = {}
+        with mock.patch("core.wiki_lookup.find_articles", return_value=[]):
+            for q in ["tell me what you know of titanfall 2", "go into the lore",
+                      "their missions", "anyway how was your day"]:
+                tab.add_message("user", q)
+                out = self.pipe.prepare_knowledge(tab, q, self.pipe.route(q, "prometheus"))
+                seen[q] = out.system_prompt
+        self.assertIn('nothing about "titanfall 2"', seen["tell me what you know of titanfall 2"])
+        self.assertIn('nothing about "titanfall 2"', seen["go into the lore"])
+        self.assertIn("still on the same subject", seen["their missions"])
+        self.assertNotIn("NOT IN YOUR LIBRARY", seen["anyway how was your day"])
+
     def test_knowledge_prompt_trimmed(self):
         plan, out = self.prepare("how do i purify water", "survival")
         self.assertLess(len(out.system_prompt), 8000)
