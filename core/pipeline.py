@@ -150,7 +150,7 @@ class QueryPipeline:
         # Companion tab: a short friend-like prompt instead of the knowledge
         # pipeline (emergencies still go the full way below)
         if tab.id == "prometheus" and routing_plan.intent != Intent.EMERGENCY:
-            return self._prepare_companion(user_input, routing_plan, trace)
+            return self._prepare_companion(user_input, routing_plan, trace, tab=tab)
 
         # Step 2: tiered retrieval. A short follow-up ("yes but why") has nothing
         # to search for on its own — search with the previous question too, so
@@ -236,6 +236,10 @@ class QueryPipeline:
             if wiki_text:
                 knowledge_context = (knowledge_context + "\n\n---\n\n" if knowledge_context else "") + \
                     "[General reference — lower priority than the sources above]\n" + wiki_text
+            else:
+                missing = self._not_in_library_note(user_input)
+                if missing:
+                    knowledge_context = (knowledge_context + "\n\n" if knowledge_context else "") + missing
 
         # Step 8: system prompt (order matters — guidance last)
         system_prompt = self.llm.build_system_prompt(
@@ -307,13 +311,14 @@ class QueryPipeline:
         )
 
     def _prepare_companion(self, user_input: str, routing_plan: RoutingPlan,
-                           trace=None) -> PreparedAnswer:
+                           trace=None, tab=None) -> PreparedAnswer:
         """
         Friend-like chat. Kept deliberately small: every extra token in the
         prompt is read by the model before its first word (that was ~3 s).
 
         Step 1: the companion personality
-        Step 2: their name, if known (nothing else from memory)
+        Step 2: their name, if known, then a short line of what they've told
+                you about themselves (core/profile) and earlier chat topics
         Step 3: only for philosophy/psychology questions, two short
                 passages from the companion shelf as background
         Step 4: if the message names something with a Wikipedia article
@@ -324,6 +329,13 @@ class QueryPipeline:
         name = (self.memory.data.get("user", {}) or {}).get("name")
         if name:
             parts.append(f"Their name is {name}.")
+
+        # Step 2b: what they've told you about themselves, and what earlier
+        # chats in this tab were about (titles only — a new chat stays fresh)
+        from core.profile import about_line, earlier_topics
+        for line in (about_line(self.memory), earlier_topics(tab)):
+            if line:
+                parts.append(line)
 
         q = user_input.lower()
         if any(t in q for t in COMPANION_TOPICS):
@@ -339,23 +351,56 @@ class QueryPipeline:
                 trace.retrieval.total_chunks = len(chunks)
                 trace.retrieval.has_sources = bool(chunks)
 
-        # Step 4
+        # Step 3b: a note of theirs (Obsidian) that the message names by title
+        from core.obsidian import notes_named_in
+        own = notes_named_in(user_input)
+        if own:
+            parts.append("From their own notes (they wrote this):\n" +
+                         "\n\n".join(f"{t}: {b}" for t, b in own))
+
+        # Step 4 — or, if they named something we have nothing on, say so
         wiki_notes, sources = self._wikipedia_background(user_input)
+        sources = [f"Obsidian — {t}" for t, _ in own] + sources
         if wiki_notes:
             parts.append(wiki_notes)
+        elif not own:
+            missing = self._not_in_library_note(user_input)
+            if missing:
+                parts.append(missing)
+
+        # Step 5: how to sound right now — read from their message in code,
+        # last in the prompt (a small model can't pick tone up on its own)
+        from core.tone import detect_tone
+        tone, how = detect_tone(user_input, previous_question(tab, user_input) if tab else "")
+        parts.append(f"Right now: {how}")
 
         system_prompt = "\n\n".join(parts)
         if trace:
             trace.gate_mode = "direct"
+            trace.risk_domains = [f"tone:{tone}"]
             trace.prompt_chars = len(system_prompt)
         return PreparedAnswer(
             system_prompt=system_prompt,
             mode=ResponseMode.DIRECT,
-            intent=routing_plan.intent.value,
+            intent=f"chat_{tone}",          # sets the temperature (core/llm.py)
             sufficiency="NONE",
             status_text="",
             sources=sources,
         )
+
+    @staticmethod
+    def _not_in_library_note(user_input: str) -> str:
+        """
+        They asked about a specific thing (a film, book, person…) and there's
+        no article for it: the model must say so, not invent a plot.
+        """
+        from core.wiki_lookup import asked_about
+        thing = asked_about(user_input)
+        if not thing:
+            return ""
+        return (f'NOT IN YOUR LIBRARY: you have nothing about "{thing}" — it isn\'t in your '
+                f'offline database. Say that plainly, e.g. "I don\'t have {thing} in my '
+                f'database." Don\'t guess, and don\'t describe it from memory.')
 
     @staticmethod
     def _wikipedia_background(user_input: str, words: int = 110):

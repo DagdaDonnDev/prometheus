@@ -107,9 +107,18 @@ class ImagePanel(QFrame):
 
 
 class MessageBubble(QFrame):
+    """
+    One message. Right-click it, or use its ⋯ button, for:
+      Copy · Edit (your messages) · Retry (the last reply) · Delete
+    The ⋯ button shows on hover on a computer and always on a phone.
+    """
+    action = Signal(str, object)          # ("copy"|"edit"|"retry"|"delete", message dict)
+
     def __init__(self, role: str, content: str = "", parent=None):
         super().__init__(parent)
         self.role = role
+        self.msg = None                   # the tab-history entry this bubble shows
+        self.can_retry = lambda: False    # set by ChatView: only the last reply
         self.setObjectName(f"bubble_{role}")
 
         layout = QHBoxLayout(self)
@@ -121,13 +130,24 @@ class MessageBubble(QFrame):
             Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
         )
         self._label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
-
+        self._label.setContextMenuPolicy(Qt.NoContextMenu)   # right-click → our menu
         font = self._label.font()
         font.setPointSize(13)
         self._label.setFont(font)
 
+        self._menu_btn = QPushButton("⋯")
+        self._menu_btn.setObjectName("bubbleMenuBtn")
+        self._menu_btn.setFixedSize(26, 26)
+        self._menu_btn.setCursor(Qt.PointingHandCursor)
+        self._menu_btn.setToolTip("Copy, edit, retry or delete")
+        self._menu_btn.clicked.connect(
+            lambda: self._show_menu(self._menu_btn.mapToGlobal(self._menu_btn.rect().bottomLeft())))
+        if not PHONE_LAYOUT:
+            self._menu_btn.setVisible(False)          # appears on hover
+
         if role == "user":
             layout.addStretch()
+            layout.addWidget(self._menu_btn, 0, Qt.AlignTop)
             layout.addWidget(self._label)
         else:
             if not PHONE_LAYOUT:   # phone: no icon column, every pixel goes to text
@@ -137,7 +157,45 @@ class MessageBubble(QFrame):
                 icon.setAlignment(Qt.AlignTop)
                 layout.addWidget(icon)
             layout.addWidget(self._label)
+            layout.addWidget(self._menu_btn, 0, Qt.AlignTop)
             layout.addStretch()
+
+    # ── Actions ────────────────────────────────────────────────────────────
+
+    def enterEvent(self, event):
+        if not PHONE_LAYOUT:
+            self._menu_btn.setVisible(True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        if not PHONE_LAYOUT:
+            self._menu_btn.setVisible(False)
+        super().leaveEvent(event)
+
+    def contextMenuEvent(self, event):
+        self._show_menu(event.globalPos())
+
+    def menu_actions(self) -> list:
+        """Names of what the menu offers right now (also used by tests)."""
+        names = ["copy"]
+        if self.msg is not None:
+            if self.role == "user":
+                names.append("edit")
+            elif self.can_retry():
+                names.append("retry")
+            names.append("delete")
+        return names
+
+    def _show_menu(self, where):
+        from PySide6.QtWidgets import QMenu
+        labels = {"copy": "Copy", "edit": "Edit", "retry": "Retry", "delete": "Delete"}
+        menu = QMenu(self)
+        for name in self.menu_actions():
+            if name == "delete":
+                menu.addSeparator()
+            menu.addAction(labels[name],
+                           lambda n=name: self.action.emit(n, self.msg or {"content": self.get_text()}))
+        menu.exec(where)
 
     def append_text(self, text: str):
         current = self._label.text()
@@ -153,6 +211,7 @@ class MessageBubble(QFrame):
 class ChatView(QWidget):
     suggestion_clicked   = Signal(str)   # a "try asking" question was tapped
     assessment_requested = Signal()      # the situation-check card was tapped
+    message_action       = Signal(str, object)   # copy / edit / retry / delete, message dict
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -211,7 +270,8 @@ class ChatView(QWidget):
         self._clear_messages()
 
         for msg in tab.history:
-            bubble = MessageBubble(msg["role"], msg["content"])
+            bubble = self._new_bubble(msg["role"], msg["content"])
+            bubble.msg = msg
             self._messages_layout.insertWidget(
                 self._messages_layout.count() - 1, bubble
             )
@@ -245,9 +305,27 @@ class ChatView(QWidget):
             if item.widget():
                 item.widget().deleteLater()
 
+    def _new_bubble(self, role: str, content: str) -> MessageBubble:
+        """Every bubble reports its menu actions through message_action."""
+        bubble = MessageBubble(role, content)
+        bubble.action.connect(self.message_action)
+        bubble.can_retry = lambda b=bubble: (
+            b.msg is not None and self._current_tab is not None and
+            bool(self._current_tab.history) and self._current_tab.history[-1] is b.msg and
+            b.role == "assistant"
+        )
+        self._last_bubble = bubble
+        return bubble
+
+    def attach_last(self, msg: dict):
+        """Tie the newest bubble to the history entry just saved for it."""
+        b = getattr(self, "_last_bubble", None)
+        if b is not None and b.msg is None:
+            b.msg = msg
+
     def add_message(self, role: str, content: str):
         self._hide_welcome()
-        bubble = MessageBubble(role, content)
+        bubble = self._new_bubble(role, content)
         self._messages_layout.insertWidget(
             self._messages_layout.count() - 1, bubble
         )
@@ -255,7 +333,7 @@ class ChatView(QWidget):
 
     def start_assistant_message(self):
         self._hide_welcome()
-        self._current_bubble = MessageBubble("assistant", "")
+        self._current_bubble = self._new_bubble("assistant", "")
         self._messages_layout.insertWidget(
             self._messages_layout.count() - 1, self._current_bubble
         )

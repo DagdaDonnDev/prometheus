@@ -5,7 +5,7 @@ REM  Double-click this file. It will:
 REM    1. Check Python 3.9+
 REM    2. Check pip
 REM    3. Check Ollama (opens the download page if missing)
-REM    4. Pull the llama3.2:3b model
+REM    4. Pull the default model (LFM2.5 1.2B)
 REM    5. Install Python requirements
 REM    6. Build the knowledge base index (ingest.py)
 REM    7. Offer to launch Prometheus
@@ -68,23 +68,23 @@ if errorlevel 1 (
 )
 echo [OK] Ollama installed
 
-REM Start the Ollama server if it isn't already answering
-ollama list >nul 2>nul
-if errorlevel 1 (
-    echo [..] Starting Ollama
-    start "Ollama" /min ollama serve
-    timeout /t 5 /nobreak >nul
-)
-
 REM -- Step 4: model --------------------------------------------
-echo [..] Pulling llama3.2:3b (about 2 GB, first time only)
-ollama pull llama3.2:3b
+REM The model is kept in prometheus\models (not your user folder).
+REM Step 4a: already downloaded into Ollama's usual folder? Move it here.
+REM Step 4b: otherwise download it straight into prometheus\models.
+set "MODEL=hf.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF:latest"
+%PY% -m core.ollama_local --move
+%PY% -m core.ollama_local --has %MODEL%
 if errorlevel 1 (
-    echo [X] Model download failed. Check your internet connection and run this again.
-    pause
-    exit /b 1
+    echo [..] Downloading LFM2.5 1.2B Instruct into prometheus\models - about 730 MB, first time only
+    %PY% -m core.ollama_local --pull %MODEL%
+    if errorlevel 1 (
+        echo [X] Model download failed. Check your internet connection and run this again.
+        pause
+        exit /b 1
+    )
 )
-echo [OK] Model ready
+echo [OK] Model ready in prometheus\models
 
 REM -- Step 5: requirements -------------------------------------
 echo [..] Installing Python packages
@@ -95,6 +95,14 @@ if errorlevel 1 (
     exit /b 1
 )
 echo [OK] Packages installed
+
+REM -- Step 5b: voice (Piper speaks, Whisper listens) -------------
+echo [..] Setting up voice
+%PY% setup_voice.py
+if errorlevel 1 (
+    echo [!] Voice isn't fully set up - Prometheus still works by text.
+    echo     Fix what's listed above, then run: %PY% setup_voice.py
+)
 
 REM -- Step 6: knowledge base -----------------------------------
 echo [..] Building the knowledge base index (10-30 min first time)

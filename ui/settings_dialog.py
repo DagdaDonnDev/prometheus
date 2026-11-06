@@ -15,13 +15,15 @@ from core.memory import Memory
 
 
 class SettingsDialog(QDialog):
-    def __init__(self, config: Config, memory: Memory, parent=None):
+    def __init__(self, config: Config, memory: Memory, parent=None, obsidian_sync=None):
         super().__init__(parent)
         self.config = config
         self.memory = memory
+        self._obsidian_sync = obsidian_sync     # MainWindow._obsidian_sync
 
         self.setWindowTitle("Prometheus — Settings")
-        self.setMinimumWidth(450)
+        from core.platform_info import PHONE_LAYOUT
+        self.setMinimumWidth(450 if PHONE_LAYOUT else 560)
         self.setMinimumHeight(400)
 
         layout = QVBoxLayout(self)
@@ -32,6 +34,7 @@ class SettingsDialog(QDialog):
         tabs.addTab(self._build_assistant_tab(), "💬 Assistant")
         tabs.addTab(self._build_model_tab(), "🤖 Model")
         tabs.addTab(self._build_voice_tab(), "🎤 Voice")
+        tabs.addTab(self._build_obsidian_tab(), "📓 Obsidian")
         tabs.addTab(self._build_about_tab(), "ℹ About")
 
         layout.addWidget(tabs)
@@ -66,6 +69,33 @@ class SettingsDialog(QDialog):
         self._skills_edit.setPlaceholderText("e.g. nursing, carpentry, electronics")
         form.addRow("Known skills:", self._skills_edit)
 
+        # What it has picked up from your chats — fix or remove anything wrong.
+        # Lists are comma-separated.
+        self._work_edit = QLineEdit(u.get("work") or "")
+        self._work_edit.setPlaceholderText("e.g. nurse, at the hospital")
+        form.addRow("Work:", self._work_edit)
+
+        self._people_edit = QLineEdit(", ".join(u.get("mentioned_people", [])))
+        self._people_edit.setPlaceholderText("e.g. Kate (sister), Max (dog)")
+        form.addRow("People and pets:", self._people_edit)
+
+        self._likes_edit = QLineEdit(", ".join(u.get("likes", [])))
+        self._likes_edit.setPlaceholderText("e.g. hiking, Inception (favourite film)")
+        form.addRow("Likes:", self._likes_edit)
+
+        self._dislikes_edit = QLineEdit(", ".join(u.get("dislikes", [])))
+        self._dislikes_edit.setPlaceholderText("e.g. horror films, mornings")
+        form.addRow("Doesn't like:", self._dislikes_edit)
+
+        notes = [n for n in u.get("notes", []) if isinstance(n, str)]
+        self._notes_edit = QLineEdit("; ".join(notes))
+        self._notes_edit.setPlaceholderText("Anything else it should know, separated by ;")
+        form.addRow("Notes:", self._notes_edit)
+
+        learned = QLabel("Filled in as you chat. Change or clear anything that's wrong.")
+        learned.setObjectName("noteLabel")
+        form.addRow(learned)
+
         self._day_spin = QSpinBox()
         self._day_spin.setMinimum(1)
         self._day_spin.setMaximum(9999)
@@ -73,6 +103,93 @@ class SettingsDialog(QDialog):
         form.addRow("Current day:", self._day_spin)
 
         return w
+
+    def _refresh_user_fields(self):
+        """Show memory again after Obsidian edits were read back into it."""
+        u = self.memory.data["user"]
+        self._name_edit.setText(u.get("name") or "")
+        self._location_edit.setText(u.get("location_estimate") or "")
+        self._skills_edit.setText(", ".join(u.get("known_skills", [])))
+        self._work_edit.setText(u.get("work") or "")
+        self._people_edit.setText(", ".join(u.get("mentioned_people", [])))
+        self._likes_edit.setText(", ".join(u.get("likes", [])))
+        self._dislikes_edit.setText(", ".join(u.get("dislikes", [])))
+        self._notes_edit.setText("; ".join(n for n in u.get("notes", []) if isinstance(n, str)))
+        self._day_spin.setValue(u.get("day_count", 1))
+
+    def _build_obsidian_tab(self) -> QWidget:
+        """
+        The vault folder, whether your own notes are used, and Update now.
+
+        Step 1: choose the vault (the folder Obsidian opened)
+        Step 2: Update now — saves what's in the You tab, reads back Me.md
+                edits, writes the mind map (also done when the app closes)
+        """
+        from PySide6.QtWidgets import QCheckBox, QFileDialog
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setSpacing(10)
+
+        row = QHBoxLayout()
+        self._vault_edit = QLineEdit(self.config.obsidian_vault or "")
+        self._vault_edit.setPlaceholderText("Your vault folder")
+        browse = QPushButton("Browse…")
+
+        def pick():
+            d = QFileDialog.getExistingDirectory(self, "Choose your Obsidian vault",
+                                                 self._vault_edit.text() or "")
+            if d:
+                self._vault_edit.setText(d)
+        browse.clicked.connect(pick)
+        row.addWidget(self._vault_edit, 1)
+        row.addWidget(browse)
+        lay.addWidget(QLabel("Vault folder:"))
+        lay.addLayout(row)
+
+        self._use_notes = QCheckBox("Use my other notes as a source")
+        self._use_notes.setChecked(self.config.obsidian_use_notes)
+        lay.addWidget(self._use_notes)
+
+        sync_row = QHBoxLayout()
+        sync_btn = QPushButton("Update now")
+        sync_btn.setObjectName("primaryBtn")
+        self._obsidian_status = QLabel("")
+        self._obsidian_status.setObjectName("noteLabel")
+        self._obsidian_status.setWordWrap(True)
+        self._obsidian_status.hide()                 # shown once there's something to say
+        sync_btn.clicked.connect(self._sync_obsidian_now)
+        sync_btn.setEnabled(self._obsidian_sync is not None)
+        sync_row.addWidget(sync_btn, 0, Qt.AlignLeft)
+        sync_row.addWidget(self._obsidian_status, 1)
+        lay.addLayout(sync_row)
+
+        about = QLabel(
+            "Adds a Prometheus folder to your vault. Open Graph view in Obsidian to see the map.\n\n"
+            "Me: what it knows about you. Change the properties there and it picks the change up.\n\n"
+            "One note per tab, linking that tab's chats and the topics in them.\n\n"
+            "Your own notes are never changed. With the box ticked, the knowledge tabs can use "
+            "them, and the chat tab reads a note when you mention it by name.\n\n"
+            "It also updates when you close Prometheus."
+        )
+        about.setObjectName("noteLabel")
+        about.setWordWrap(True)
+        lay.addWidget(about)
+        lay.addStretch()
+        return w
+
+    def _sync_obsidian_now(self):
+        from core import obsidian
+        self._save_user_fields()
+        self.config.obsidian_vault = self._vault_edit.text().strip()
+        self.config.obsidian_use_notes = self._use_notes.isChecked()
+        obsidian.set_vault(self.config.obsidian_vault, self.config.obsidian_use_notes)
+        msg = self._obsidian_sync() if self._obsidian_sync else ""
+        n = obsidian.note_count() if self.config.obsidian_use_notes else 0
+        if obsidian.vault_path() and self.config.obsidian_use_notes:
+            msg += f" {n} of your notes available as a source."
+        self._obsidian_status.setText(msg)
+        self._obsidian_status.setVisible(bool(msg))
+        self._refresh_user_fields()
 
     def _build_assistant_tab(self) -> QWidget:
         """What the assistant is called and how it comes across."""
@@ -108,7 +225,7 @@ class SettingsDialog(QDialog):
     def _build_model_tab(self) -> QWidget:
         """
         Pick the models. Each box lists what's installed in Ollama, and
-        you can also type any model name (pull it first with ollama pull).
+        you can also type any model name (get it first with python -m core.ollama_local --pull).
         """
         from core.llm import LLMEngine
 
@@ -149,11 +266,15 @@ class SettingsDialog(QDialog):
         self._rag_results.setValue(self.config.rag_results)
         form.addRow("Library passages used:", self._rag_results)
 
-        note = QLabel(
-            "The lists show the models installed in Ollama. To add one:\n"
-            "    ollama pull <model name>     then press Check Ollama.\n"
-            "The chat tab can use a different model from the knowledge tabs."
-        )
+        from core import ollama_local
+        if ollama_local.has_local_models():
+            where = ("Models are kept in prometheus\\models. To add one:\n"
+                     "    python -m core.ollama_local --pull <model name>\n"
+                     "then press Check Ollama.")
+        else:
+            where = ("The lists show the models installed in Ollama. To keep them in\n"
+                     "the prometheus folder instead:  python -m core.ollama_local --move")
+        note = QLabel(where + "\nThe chat tab can use a different model from the knowledge tabs.")
         note.setObjectName("noteLabel")
         form.addRow(note)
 
@@ -190,7 +311,7 @@ class SettingsDialog(QDialog):
             done = Signal(dict)
             def run(inner):
                 ok = probe.is_available()
-                inner.done.emit({"ok": ok, "error": probe.last_error,
+                inner.done.emit({"ok": ok, "error": getattr(probe, "last_error", ""),
                                  "installed": probe.list_models() if ok else []})
 
         if getattr(self, "_probe_thread", None) and self._probe_thread.isRunning():
@@ -205,7 +326,7 @@ class SettingsDialog(QDialog):
         if result["ok"]:
             self._ollama_status.setText(
                 f"Connected — {len(installed)} model(s) installed." if installed
-                else "Connected, but no models yet. Run: ollama pull <model name>"
+                else "Connected, but no models yet. Run: python -m core.ollama_local --pull <model name>"
             )
         else:
             self._ollama_status.setText(
@@ -283,8 +404,8 @@ class SettingsDialog(QDialog):
             f"{status}\n\n"
             "Add voices by placing each character in its own\n"
             "subfolder under voices/ containing the .onnx model.\n\n"
-            "Voice input requires:\n"
-            "pip install faster-whisper sounddevice"
+            "To set up or check voice (Piper, Whisper, microphone):\n"
+            "python setup_voice.py"
         )
         note.setObjectName("noteLabel")
         form.addRow(note)
@@ -304,7 +425,7 @@ class SettingsDialog(QDialog):
             "<p>No internet. No subscription. No servers.<br>"
             "No token limits. No rate limits. No data leaving your device.</p>"
             "<p>Built on:<br>"
-            "• Llama 3.2 3B (via Ollama)<br>"
+            "• LFM2.5 1.2B Instruct by default, any Ollama model (Settings → Model)<br>"
             "• Piper TTS<br>"
             "• Faster-Whisper STT<br>"
             "• ChromaDB + sentence-transformers<br>"
@@ -319,15 +440,29 @@ class SettingsDialog(QDialog):
         return w
 
     def _save(self):
+        self._save_user_fields()
+        self.config.obsidian_vault = self._vault_edit.text().strip()
+        self.config.obsidian_use_notes = self._use_notes.isChecked()
+        self._save_rest()
+
+    def _save_user_fields(self):
         # Save user settings
         u = self.memory.data["user"]
         u["name"] = self._name_edit.text().strip() or None
         u["location_estimate"] = self._location_edit.text().strip() or None
         u["day_count"] = self._day_spin.value()
 
-        skills_text = self._skills_edit.text().strip()
-        if skills_text:
-            u["known_skills"] = [s.strip() for s in skills_text.split(",") if s.strip()]
+        # Lists: comma-separated, notes: ";"-separated. An empty box clears it.
+        def items(text, sep=","):
+            return [s.strip() for s in text.split(sep) if s.strip()]
+        u["known_skills"]     = items(self._skills_edit.text())
+        u["work"]             = self._work_edit.text().strip() or None
+        u["mentioned_people"] = items(self._people_edit.text())
+        u["likes"]            = items(self._likes_edit.text())
+        u["dislikes"]         = items(self._dislikes_edit.text())
+        u["notes"]            = items(self._notes_edit.text(), ";")
+
+    def _save_rest(self):
 
         # Save model settings
         fast = (self._fast_model.currentData() or self.config.fast_model).strip()

@@ -51,7 +51,9 @@ REM -- Step 1: versions --------------------------------------------
   echo.
   echo --- Ollama ---
   ollama --version
-  echo Installed models:
+  echo Models in prometheus\models:
+  %PY% -m core.ollama_local --list
+  echo Models in Ollama's usual folder:
   ollama list
   echo Loaded right now:
   ollama ps

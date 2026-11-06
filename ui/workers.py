@@ -87,6 +87,11 @@ class OllamaCheckWorker(QThread):
         self.llm = llm
 
     def run(self):
+        # Step 1: if the model lives in prometheus/models, start our own Ollama
+        # for it (port 11435) and give it a few seconds to come up
+        from core import ollama_local
+        ollama_local.start(wait=8)
+        # Step 2: find whichever Ollama answers
         reachable = self.llm.is_available()
         self.checked.emit({
             "reachable": reachable,
@@ -107,6 +112,16 @@ class InitWorker(QThread):
         self.config = config
 
     def run(self):
+        # List Wikipedia's article titles now, in the background, so the first
+        # chat message doesn't pay for it (can take seconds with ~200k files)
+        try:
+            from core import wiki_lookup
+            n = wiki_lookup.article_count()
+            if n:
+                self.status_update.emit(f"Wikipedia: {n:,} articles ready")
+        except Exception:
+            pass
+
         # Initialize knowledge base
         self.knowledge.initialize_vector_db(
             status_callback=self.status_update.emit

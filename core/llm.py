@@ -1,5 +1,5 @@
 """
-LLM Engine - Llama 3.2 3B via Ollama with token streaming.
+LLM Engine — any Ollama model (default LFM2.5 1.2B Instruct), token streaming.
 Fully offline. Unlimited. No API keys.
 """
 
@@ -22,6 +22,12 @@ INTENT_TEMPERATURE = {
     "discuss":    0.80,   # Conversational, varied
     "reflect":    0.85,   # Warm, personal, never robotic
     "crisis":     0.40,   # Calm and steady — not robotic, not loose
+    # Chat tab, by the tone read from their message (core/tone.py)
+    "chat_annoyed": 0.35,  # stick to the point, no flourishes
+    "chat_low":     0.50,
+    "chat_curious": 0.55,
+    "chat_neutral": 0.65,
+    "chat_excited": 0.80,
 }
 
 DEFAULT_TEMPERATURE = 0.65
@@ -78,10 +84,16 @@ class LLMEngine:
         self._base_url = fast_local_url(url)
 
     def _candidate_urls(self) -> List[str]:
-        """127.0.0.1 first (fast on Windows), then the address exactly as typed."""
+        """
+        Prometheus's own Ollama first (models in prometheus/models), then
+        127.0.0.1 (fast on Windows), then the address exactly as typed.
+        """
+        from core import ollama_local
+        own = ollama_local.active_url()
         typed = (self.config.ollama_url or "http://localhost:11434").rstrip("/")
         fast = fast_local_url(typed)
-        return [fast] if fast == typed else [fast, typed]
+        urls = [fast] if fast == typed else [fast, typed]
+        return ([own] if own else []) + [u for u in urls if u != own]
 
     def list_models(self) -> List[str]:
         """Names of the models pulled into Ollama (empty if unreachable)."""

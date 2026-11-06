@@ -344,6 +344,12 @@ QTabBar::tab:selected {
     color: #ececec;
     border-bottom: 2px solid #f0a500;
 }
+/* Scroll arrows when the tabs don't fit (phone) */
+QTabBar QToolButton {
+    background-color: #1a1a1a;
+    border: 1px solid #2b2b2b;
+    padding: 0;
+}
 
 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
     background-color: #1a1a1a;
@@ -637,3 +643,41 @@ QListWidget::item:selected, QTableWidget::item:selected {
     padding: 10px 14px;
     font-size: 14px;
 }
+
+/* ── Message menu (⋯) and the editing banner ── */
+#bubbleMenuBtn {
+    background: transparent;
+    color: #6f6f6f;
+    border: none;
+    padding: 0px;
+    font-size: 16px;
+}
+#bubbleMenuBtn:hover { color: #ececec; }
+#bubble_user #bubbleMenuBtn, #bubble_assistant #bubbleMenuBtn {
+    background: transparent; border: none; padding: 0px;
+}
+#editBanner {
+    color: #a6a6a6;
+    font-size: 11px;
+    padding: 4px 12px;
+    border-left: 3px solid #f0a500;
+    background-color: #171717;
+}
+
+/* ── Chats bar (left) ── */
+#chatsPanel {
+    background-color: #0f0f0f;
+    border-right: 1px solid #2b2b2b;
+}
+#chatList {
+    background: transparent;
+    border: none;
+}
+#chatList::item { border-left: 3px solid transparent; border-radius: 4px; }
+#chatList::item:hover { background-color: #1a1a1a; }
+#chatList::item:selected {
+    background-color: #1e1e1e;
+    border-left: 3px solid #f0a500;
+}
+#chatRowTitle { color: #ececec; font-size: 12px; }
+#chatRowWhen  { color: #6f6f6f; font-size: 10px; }

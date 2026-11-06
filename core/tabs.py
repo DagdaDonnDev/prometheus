@@ -20,6 +20,17 @@ class Message:
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
 
 
+def _new_chat_id() -> str:
+    import uuid
+    return datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
+
+
+def _title_from(text: str, limit: int = 48) -> str:
+    """A chat's title: its first question, tidied and cut to length."""
+    t = " ".join((text or "").split())
+    return (t[:limit - 1].rstrip() + "…") if len(t) > limit else (t or "New chat")
+
+
 @dataclass
 class Tab:
     id: str
@@ -27,16 +38,104 @@ class Tab:
     icon: str
     domains: List[str]
     system_prompt: str
-    history: List[Dict] = field(default_factory=list)
+    history: List[Dict] = field(default_factory=list)     # the CURRENT chat
     summary: str = ""
     custom: bool = False
+    # Separate chats: the current one lives in history/summary above (so the
+    # rest of the app is unchanged); earlier ones are kept here, untouched —
+    # a new chat starts with no influence from them.
+    chat_id: str = ""
+    chat_title: str = ""
+    chat_created: str = ""
+    chats: List[Dict] = field(default_factory=list)
 
     def add_message(self, role: str, content: str):
+        if not self.chat_id:
+            self.chat_id = _new_chat_id()
+            self.chat_created = datetime.now().isoformat()
+        if role == "user" and not self.chat_title:
+            self.chat_title = _title_from(content)
         self.history.append({
             "role": role,
             "content": content,
             "timestamp": datetime.now().isoformat()
         })
+
+    # ── Chats ──────────────────────────────────────────────────────────────
+
+    def _current_as_record(self) -> Dict:
+        updated = self.history[-1].get("timestamp", "") if self.history else self.chat_created
+        return {
+            "id": self.chat_id or _new_chat_id(),
+            "title": self.chat_title or _title_from(next(
+                (m["content"] for m in self.history if m["role"] == "user"), "New chat")),
+            "created": self.chat_created or updated,
+            "updated": updated,
+            "history": self.history,
+            "summary": self.summary,
+        }
+
+    def _archive_current(self):
+        """Step 1 of switching: keep the current chat (if it has anything) in the list."""
+        if not self.history and not self.summary:
+            return
+        record = self._current_as_record()
+        self.chats = [c for c in self.chats if c["id"] != record["id"]] + [record]
+
+    def _load_record(self, record: Dict):
+        self.history = record.get("history", [])
+        self.summary = record.get("summary", "")
+        self.chat_id = record.get("id", "")
+        self.chat_title = record.get("title", "")
+        self.chat_created = record.get("created", "")
+
+    def new_chat(self):
+        """Keep this chat, start an empty one."""
+        self._archive_current()
+        self._load_record({})
+
+    def open_chat(self, chat_id: str) -> bool:
+        """Keep this chat, make an earlier one current."""
+        if chat_id == self.chat_id:
+            return True
+        record = next((c for c in self.chats if c["id"] == chat_id), None)
+        if record is None:
+            return False
+        self._archive_current()
+        self.chats = [c for c in self.chats if c["id"] != chat_id]
+        self._load_record(record)
+        return True
+
+    def delete_chat(self, chat_id: str):
+        if chat_id == self.chat_id:
+            self._load_record({})
+        else:
+            self.chats = [c for c in self.chats if c["id"] != chat_id]
+
+    def rename_chat(self, chat_id: str, title: str):
+        title = title.strip()[:80] or "Untitled chat"
+        if chat_id == self.chat_id:
+            self.chat_title = title
+        for c in self.chats:
+            if c["id"] == chat_id:
+                c["title"] = title
+
+    def all_chats(self, query: str = "") -> List[Dict]:
+        """
+        Every chat, newest first, the current one marked "current": True.
+        With a query: only chats whose title or messages contain every word.
+        """
+        items = [dict(c, current=False) for c in self.chats]
+        if self.history or self.summary:
+            items.append(dict(self._current_as_record(), current=True))
+        items.sort(key=lambda c: c.get("updated", ""), reverse=True)
+        words = [w for w in query.lower().split() if w]
+        if words:
+            def text(c):
+                return (c.get("title", "") + " " + c.get("summary", "") + " " +
+                        " ".join(m.get("content", "") for m in c.get("history", []))).lower()
+            items = [c for c in items if all(w in text(c) for w in words)]
+        return items
 
     def get_ollama_messages(self) -> List[Dict]:
         """Returns history in ollama format, prepending summary if exists."""
@@ -62,7 +161,11 @@ class Tab:
             "system_prompt": self.system_prompt,
             "history": self.history,
             "summary": self.summary,
-            "custom": self.custom
+            "custom": self.custom,
+            "chat_id": self.chat_id,
+            "chat_title": self.chat_title,
+            "chat_created": self.chat_created,
+            "chats": self.chats,
         }
 
     @classmethod
@@ -75,7 +178,11 @@ class Tab:
             system_prompt=data["system_prompt"],
             history=data.get("history", []),
             summary=data.get("summary", ""),
-            custom=data.get("custom", False)
+            custom=data.get("custom", False),
+            chat_id=data.get("chat_id", ""),
+            chat_title=data.get("chat_title", ""),
+            chat_created=data.get("chat_created", ""),
+            chats=data.get("chats", []),
         )
 
 
@@ -360,6 +467,10 @@ class TabManager:
                         saved = saved_tabs[default_tab.id]
                         default_tab.history = saved.get("history", [])
                         default_tab.summary = saved.get("summary", "")
+                        default_tab.chat_id = saved.get("chat_id", "")
+                        default_tab.chat_title = saved.get("chat_title", "")
+                        default_tab.chat_created = saved.get("chat_created", "")
+                        default_tab.chats = saved.get("chats", [])
                     self.tabs.append(default_tab)
 
                 # Add any custom tabs
@@ -422,11 +533,13 @@ class TabManager:
         self.save()
         return tab
 
-    def clear_tab(self, tab_id: str):
+    def clear_tab(self, tab_id: str, every_chat: bool = False):
+        """Empty the current chat (and, with every_chat, the saved ones too)."""
         tab = self.get_tab(tab_id)
         if tab:
-            tab.history = []
-            tab.summary = ""
+            tab.delete_chat(tab.chat_id)
+            if every_chat:
+                tab.chats = []
             self.save()
 
     def suggest_tab(self, user_input: str) -> str:

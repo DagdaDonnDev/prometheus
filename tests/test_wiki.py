@@ -79,6 +79,20 @@ class TestWiki(unittest.TestCase):
         finally:
             idx.unlink()
 
+    def test_asked_about(self):
+        cases = {
+            "have you seen the juror?": "the juror",
+            "what do you think of Green Book": "Green Book",
+            "Tell me about To Kill a Mockingbird": "To Kill a Mockingbird",
+            "the film named Arrival was great": "Arrival",
+            "tell me about your day": "",
+            "have you seen it?": "",
+            "what's up": "",
+            "tell me about fire": "",       # lower case, vague lead-in → not a named thing
+        }
+        for text, want in cases.items():
+            self.assertEqual(w.asked_about(text), want, text)
+
     def test_no_folder(self):
         w.WIKI_DIR = Path(self.tmp.name) / "missing"
         w._cache.update({"mtime": None, "titles": {}})

@@ -38,7 +38,7 @@ A self-contained AI assistant that works when everything else fails. Built for o
 bash setup.sh
 ```
 Both scripts check Python 3.9+ and pip, check for Ollama (Windows opens the
-download page, Linux/macOS installs it), pull `llama3.2:3b`, install
+download page, Linux/macOS installs it), pull the default model (LFM2.5 1.2B Instruct), install
 requirements, index the knowledge base, then offer to launch.
 Downloading the full source library (`bootstrap.py`, ~2GB) stays a separate step.
 
@@ -52,9 +52,16 @@ curl -fsSL https://ollama.ai/install.sh | sh
 # Windows: download installer from https://ollama.ai
 ```
 
-### 2. Pull Llama 3.2 3B (the AI brain)
+### 2. Get the AI model (default: LFM2.5 1.2B Instruct, ~730 MB)
+The model is kept in `prometheus/models`, so the whole app is one folder you
+can copy or back up. Downloads straight there:
 ```bash
-ollama pull llama3.2:3b
+python -m core.ollama_local --pull hf.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF:latest
+```
+Already pulled it with plain `ollama pull`? Move it in instead (no download;
+every file is checked, then the old copy is removed):
+```bash
+python -m core.ollama_local --move
 ```
 
 ### 3. Install Python dependencies
@@ -89,37 +96,53 @@ python main.py
 
 ## Voice Setup (Optional — Highly Recommended)
 
-Voice changes the experience from tool to companion.
-
-### Text-to-Speech (Piper)
-1. **Get the Piper program**, not the source code. From
-   https://github.com/rhasspy/piper/releases download the release for your
-   system (Windows: `piper_windows_amd64.zip`) and unzip it anywhere inside
-   `prometheus_setup/`. That folder can sit inside the project or next to it.
-   Prometheus finds `piper.exe` (or `piper`) there, on your PATH, or at the
-   path in the `PROMETHEUS_PIPER` environment variable. Keep the unzipped
-   folder together: Piper needs its `espeak-ng-data` folder beside it.
-   A "Download ZIP" of the Piper GitHub page (`piper-master`) is the source
-   code and can't speak.
-2. **Add voices**, one folder per voice, each with the model and its config:
+Voice changes the experience from tool to companion. One command sets it up
+and tests it (`setup.bat`/`setup.sh` run it too):
+```bash
+python setup_voice.py            # install what's missing, then test
+python setup_voice.py --check    # only report, no downloads
+```
+1. Installs **faster-whisper** (listening) and **sounddevice** (microphone)
+   into the Python you ran it with.
+2. Downloads the Whisper model into `models/whisper/` (tiny ≈ 75 MB, once;
+   offline after).
+3. Finds **Piper** (speaking), or downloads the release program into
+   `prometheus/piper/`. It also looks on your PATH, in `prometheus_setup/`,
+   and at `PROMETHEUS_PIPER`. (`piper-master` is Piper's source code and
+   can't speak.)
+4. Checks `voices/`: one folder per voice, each with the model and its config.
+   If it's empty, it copies voices it finds in `prometheus_setup/`.
    ```
    voices/
    ├── Vasco/   en_GB-…-medium.onnx  +  en_GB-…-medium.onnx.json
    └── Data/    en_US-…-medium.onnx  +  en_US-…-medium.onnx.json
    ```
-   The folder name is the voice name shown in ⚙ Settings. Voices:
+   The folder name is the voice name shown in ⚙ Settings. More voices:
    https://huggingface.co/rhasspy/piper-voices
+5. **Tests it end to end:** Piper says a sentence and Whisper writes down
+   what it heard. Then it lists your microphones.
 
-Playback uses Windows' built-in sound on Windows, and `aplay`/`paplay`
+If something's missing it says exactly what to do (e.g. the Visual C++
+Redistributable on Windows, `libportaudio2` on Linux, or a Python version
+faster-whisper doesn't support yet).
+
+**How speech plays:** one Piper process stays loaded for the whole session,
+replies are spoken in whole sentences, and the next sentence is made while
+the current one plays, so there are no gaps. The first piece can end at a
+comma so the voice starts quickly. Markdown (`**`, `#`, bullets) isn't read
+out. Playback uses Windows' built-in sound on Windows, and `aplay`/`paplay`
 (Linux) or `afplay` (macOS) elsewhere. Escape / ⏹ cuts speech immediately.
 
-### Speech-to-Text (Faster-Whisper)
-```bash
-pip install faster-whisper sounddevice
-```
-Model (~75MB) downloads automatically on first use.
+The 🎤 button turns on once speech recognition has loaded; hover it to see
+why if it stays off.
 
 ---
+
+## App icon
+Save the icon as **`assets/icon.png`** (square, 512×512 or larger). It's
+used for the window and taskbar, next to the name in the header, the Windows
+`.exe` (`build_exe.py` makes `icon.ico`/`icon.icns` from it; needs
+`pip install pillow`) and the Android app icon and launch screen.
 
 ## Building Executables
 
@@ -331,11 +354,66 @@ instead of looking it up.
 - Learning is saved in `memory/training/` and included in backups.
 
 ### The chat tab
-Talks like a friend, not a counsellor: curious, asks about what you said, has
-opinions. Reply length follows how you are — short and steady when you're
-struggling, an invested listener when you're excited, normal in between.
-"mhm" is a valid reply. It only looks things up when you ask about philosophy
-or psychology.
+Talks like a real person, not a counsellor or a performer: calm, plain,
+curious, has opinions, no gushing. **Tone is read from each message** — annoyed,
+low, excited, asking, or neutral (wording, CAPITALS, "!!", emoji, and what you
+said just before) — and the model is told how to sound for that one reply:
+short and direct when you're annoyed, quiet when you're low, into it when
+you're excited. "mhm" is a valid reply. When corrected it says "my mistake" and
+moves on. If you ask about a film, book or person it has no article on, it says
+so ("I don't have The Juror in my database") instead of making something up.
+
+### What it remembers about you
+When you mention something about yourself — "my sister Kate", "my dog is
+called Max", "I live in Cork", "I work as a nurse", "I love hiking", "I hate
+mornings", "my favourite film is Inception", "I know how to tie knots" — it's
+noted, and the status bar says what (**Remembered: Kate is your sister**).
+It only picks up plain statements like these; it never guesses.
+The chat tab uses this to talk to you as someone it knows, and knows the
+topics of your last few chats in that tab (titles only, so a new chat still
+starts fresh). See and fix all of it in **Settings → You** (work, people and
+pets, likes, dislikes, notes) or in Obsidian's `Me` note (below).
+
+### Obsidian — a map of you, and your notes as a source
+[Obsidian](https://obsidian.md) is a free notes app that keeps everything as
+plain files in a folder (a "vault"). In **Settings → Obsidian**, choose your
+vault folder and press **Update now**. Prometheus adds a `Prometheus` folder:
+
+| Note | What it is |
+|------|-----------|
+| `Me` | What it knows about you, as properties (name, location, work, people, likes, dislikes, skills, notes). **Edit them in Obsidian** and the changes come back into the app, merged with anything it learned meanwhile |
+| One per tab (`Survival`, `Medical`…) | That tab's mind map: links to its chats and the topics in them |
+| `Chats/…` | Each chat, linked to its tab, its topics and any of your notes it mentioned |
+| `Topics/…` | A topic (water purification, first aid, a film…) linked from every chat that touched it |
+
+Open **Graph view** in Obsidian to see it: Me → tabs → chats → topics.
+It updates by itself when you close Prometheus, and only rewrites notes that
+changed. A chat note you've edited is never deleted.
+
+**Your own notes** (everything outside the `Prometheus` folder) are never
+changed. With "Use my other notes as a source" ticked, the knowledge tabs
+search them alongside the library (not for medical or strict questions), and
+the chat tab reads a note when you mention it by name — "is my Sourdough
+Starter ok?" — shown as **Obsidian — Sourdough Starter** under the answer.
+
+### Chats
+Every tab keeps its own list of chats in the **Chats** bar on the left
+(the header's **Chats** button shows or hides it; on a phone it swaps the
+conversation for the list).
+- **+ New chat** starts an empty conversation. It sees none of your earlier
+  chats, so an old topic can't steer it.
+- **Search chats** matches titles and everything said in them.
+- Click a chat to go back to it. Right-click to **Rename** or **Delete** it.
+- A chat is named after its first message and saved as you go.
+- More ▾ → Reset → **Clear this chat** empties only the open chat;
+  **Clear all chats in every tab** removes them all (a backup is made first).
+
+### Messages
+- **Up** in an empty message box brings back what you sent before (Down goes
+  forward again) — edit it or just press Enter to send it again.
+- Hover a message (phone: always shown) for **⋯**, or right-click it:
+  **Copy**, **Edit** (your messages — sending replaces it and everything after
+  it; Esc cancels), **Retry** (the last reply) and **Delete**.
 
 Anything about suicide or self-harm, in any tab, switches to a calm, direct
 crisis response that asks whether you're safe and points you to a real person.
@@ -408,16 +486,33 @@ Survival tab also offers the optional 5-question **Situation check**.
 | **Situation check** | 5 questions → a numbered priority list |
 | **Skills** | Civilisation rebuild tracker (55 skills, 8 stages) |
 | **Map** | Offline world map (run `bootstrap_map.py` for map data) |
+| **Chats** | Show or hide this tab's chats (new, search, switch) on the left |
 | **Info** | Show or hide your situation panel. It starts hidden until there's something in it |
-| **Settings** | Name, model, voice |
+| **Settings** | You (what it knows about you), assistant, model, voice, Obsidian |
 | **More ▾** | Personal documents · Print emergency reference · Reset · Developer panel (Ctrl+D) |
 
 On a phone, Situation check, Skills and Map move into **More ▾**.
 
+### Where the model lives
+Once `prometheus/models` has a model in it, Prometheus starts its own Ollama
+for it in the background (port 11435) and stops it when you close the app.
+An Ollama app already running on your PC isn't touched, and the two don't
+clash. If `prometheus/models` is empty, Prometheus uses your normal Ollama as
+before.
+
+| Command | Does |
+|---------|------|
+| `python -m core.ollama_local --move` | Move the models Settings uses from Ollama's usual folder into `prometheus/models` |
+| `python -m core.ollama_local --pull <name>` | Download a model straight into `prometheus/models` |
+| `python -m core.ollama_local --list` | What's in `prometheus/models` |
+
+If `--move` says the old copy is still in use, quit Ollama (tray icon → Quit)
+and run it again to free the space.
+
 ### Choosing the model
 Settings → Model has one box for the knowledge tabs and one for the companion
 tab. Each lists the models installed in Ollama, and you can type any other name
-(pull it first with `ollama pull <name>`). **Check Ollama** tests the address
+(get it first with `python -m core.ollama_local --pull <name>`). **Check Ollama** tests the address
 you've typed. Changes apply as soon as you save; no restart needed.
 
 If Ollama isn't reachable, the status bar says so in plain words and checks
@@ -475,7 +570,7 @@ Effectively unlimited conversation memory per tab.
 ```bash
 # Install Ollama (ARM build)
 curl -fsSL https://ollama.ai/install.sh | sh
-ollama pull llama3.2:3b
+ollama pull hf.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF
 
 # Install Python dependencies
 python3 -m pip install -r requirements.txt --break-system-packages
@@ -506,7 +601,7 @@ For a go-bag device, add a small e-ink or sunlight-readable screen.
 
 | Component | Approximate Size |
 |-----------|-----------------|
-| Llama 3.2 3B Q4 (via Ollama) | ~1.9GB |
+| LFM2.5 1.2B Instruct (via Ollama, default) | ~730MB |
 | Faster-Whisper Tiny STT | ~75MB |
 | Piper TTS voice | ~100MB |
 | Sentence-transformers embedding model | ~90MB |
@@ -563,6 +658,7 @@ prometheus/
 │   ├── pipeline.py            # Decision layers in one place (no UI code)
 │   ├── wiki_lookup.py         # Wikipedia by title (chat background, Wikipedia tab)
 │   ├── wiki_index.py          # Full-text search over every article (SQLite FTS5)
+│   ├── tone.py                # Reads the tone of each chat message
 │   ├── embedder.py            # One shared text-embedding model, offline once cached
 │   ├── platform_info.py       # Android / phone-layout detection
 │   ├── intent_router.py       # 10 intents, domain tiers, Training Path flag

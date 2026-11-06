@@ -48,6 +48,17 @@ def main():
     app.setApplicationVersion("1.0.0")
     app.setOrganizationName("Prometheus")
 
+    # App icon (assets/icon.png): window, taskbar, Alt+Tab. On Windows the
+    # taskbar shows Python's icon unless the app has its own ID.
+    if os.path.exists(APP_ICON):
+        app.setWindowIcon(QIcon(APP_ICON))
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Prometheus.App")
+        except Exception:
+            pass
+
     # Load config
     config = Config()
 
@@ -59,6 +70,9 @@ def main():
     window.show()
 
     sys.exit(app.exec())
+
+
+APP_ICON = os.path.join("assets", "icon.png")
 
 
 def load_stylesheet():

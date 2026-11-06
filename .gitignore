@@ -8,6 +8,7 @@ knowledge_base/*/**
 knowledge_base/*/README.md
 knowledge_base/wikipedia/
 memory/
+models/
 voices/
 prometheus_setup/
 __pycache__/
@@ -30,3 +31,8 @@ wheels/
 
 # debug_run.bat output
 logs/
+
+# Made from assets/icon.png by build_exe.py
+assets/icon.ico
+assets/icon.icns
+piper/

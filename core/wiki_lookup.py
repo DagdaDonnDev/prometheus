@@ -55,7 +55,8 @@ _cache: Dict[str, object] = {"mtime": None, "titles": {}}
 def _is_disambiguation(path: Path) -> bool:
     """'X may refer to: …' pages list meanings — the real article is a variant."""
     try:
-        head = path.open(encoding="utf-8", errors="replace").read(400).lower()
+        with path.open(encoding="utf-8", errors="replace") as f:
+            head = f.read(400).lower()
     except OSError:
         return False
     return "may refer to" in head or "can refer to" in head or "may mean" in head
@@ -124,7 +125,8 @@ def find_articles(text: str, max_articles: int = 2) -> List[Tuple[str, Path]]:
 
 def _title_of(path: Path) -> str:
     try:
-        first = path.open(encoding="utf-8", errors="replace").readline()
+        with path.open(encoding="utf-8", errors="replace") as f:
+            first = f.readline()
         if first.startswith("# "):
             return first[2:].strip()
     except OSError:
@@ -243,3 +245,47 @@ def read_article(path: Path) -> str:
         return path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
+
+
+# ── "Is this something specific I don't have?" ──────────────────────────────
+
+_MEDIA_WORDS = r"(?:movie|film|show|series|tv show|book|novel|song|album|band|game|video game|anime|podcast)"
+_ASK_PATTERNS = [
+    # verbs that only make sense for a specific thing: lower case is fine after these
+    (r"\b(?:have you|did you|ever|you)\s+(?:seen|watched|read|heard of|heard|played|listened to)\s+(.+)", False),
+    (r"\bheard of\s+(.+)", False),
+    (r"\b(?:the|that|this)\s+" + _MEDIA_WORDS + r"\s+(?:called|named)?\s*(.+)", False),
+    # vaguer lead-ins: only if what follows is Capitalised or "quoted"
+    (r"\b(?:what do you think (?:of|about)|thoughts on|tell me about|do you know|"
+     r"what(?:'s| is| was)|who(?:'s| is| was))\s+(.+)", True),
+]
+_NOT_A_THING = {"you", "your", "yours", "yourself", "my", "me", "mine", "it", "its", "this", "that",
+                "them", "they", "him", "her", "us", "we", "i", "what", "how", "why", "when",
+                "where", "who", "up", "going", "anything", "something", "everything", "life"}
+
+
+def asked_about(text: str) -> str:
+    """
+    The specific thing a message asks about ("the juror", "Green Book"), or "".
+    Used to make the model say plainly when it's not in the library, instead
+    of inventing a plot. Errs on the side of "" — a missed case is better
+    than "I don't have your day in my database".
+    """
+    for pattern, needs_capital in _ASK_PATTERNS:
+        m = re.search(pattern, text, flags=re.IGNORECASE)
+        if not m:
+            continue
+        thing = m.group(1)
+        thing = re.split(r"[?.!,;]| (?:and|but|lol|haha|though|at all|yet|before|recently|"
+                         r"about|was|is|were|are|has|had|looks|seems|sounds)\b", thing, flags=re.I)[0]
+        thing = re.sub(r"^(?:the\s+)?" + _MEDIA_WORDS + r"\s+(?:called\s+|named\s+)?", "", thing.strip(), flags=re.I)
+        thing = thing.strip(" \"'“”")
+        words = thing.split()
+        if not words or len(words) > 6 or words[0].lower() in _NOT_A_THING:
+            continue
+        if needs_capital:
+            quoted = re.search(r"[\"“']" + re.escape(thing) + r"[\"”']", text)
+            if not (thing[:1].isupper() or quoted):
+                continue
+        return thing
+    return ""

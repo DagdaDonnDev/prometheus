@@ -27,6 +27,9 @@ class Memory:
                 "location_estimate": None,
                 "known_skills": [],
                 "mentioned_people": [],
+                "work": None,
+                "likes": [],
+                "dislikes": [],
                 "psychological_state": "unknown",
                 "notes": []
             },

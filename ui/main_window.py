@@ -56,6 +56,13 @@ class MainWindow(QMainWindow):
         # Core systems
         self.memory = Memory()
         self.tab_manager = TabManager()
+        # Obsidian: take any edits made to Me.md while the app was closed
+        from core import obsidian
+        obsidian.set_vault(config.obsidian_vault, config.obsidian_use_notes)
+        try:
+            obsidian.read_back_only(self.memory)
+        except Exception:
+            pass
         self.knowledge = KnowledgeBase()
         self.llm = LLMEngine(config)
         self.tts = TTSEngine(config)
@@ -246,14 +253,24 @@ class MainWindow(QMainWindow):
         self.tab_bar.quick_access_requested.connect(self._show_quick_access)
         main_layout.addWidget(self.tab_bar)
 
-        # Content area (splitter: chat | sidebar)
+        # Content area (splitter: chats | chat | sidebar)
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.setHandleWidth(1)
+
+        # Chats bar on the left: new chat, search, this tab's chats
+        from ui.chats_panel import ChatsPanel
+        self.chats_panel = ChatsPanel()
+        self.chats_panel.new_chat_requested.connect(self._new_chat)
+        self.chats_panel.open_requested.connect(self._open_chat)
+        self.chats_panel.delete_requested.connect(self._delete_chat)
+        self.chats_panel.rename_requested.connect(self._rename_chat)
+        self.splitter.addWidget(self.chats_panel)
 
         # Chat view (welcome panel questions send straight away)
         self.chat_view = ChatView()
         self.chat_view.check_pending = lambda: not self.memory.data["user"].get("assessment_done")
         self.chat_view.suggestion_clicked.connect(self._on_send)
+        self.chat_view.message_action.connect(self._on_message_action)
         self.chat_view.assessment_requested.connect(self._show_assessment)
         self.splitter.addWidget(self.chat_view)
 
@@ -263,9 +280,13 @@ class MainWindow(QMainWindow):
         self.sidebar.setMinimumWidth(200)
         self.splitter.addWidget(self.sidebar)
 
-        self.splitter.setSizes([800, 280])
-        self.splitter.setStretchFactor(0, 1)
-        self.splitter.setStretchFactor(1, 0)
+        self.splitter.setSizes([240, 800, 280])
+        self.splitter.setStretchFactor(0, 0)
+        self.splitter.setStretchFactor(1, 1)
+        self.splitter.setStretchFactor(2, 0)
+        if PHONE_LAYOUT:
+            self.chats_panel.hide()            # phone: the Chats button swaps it in
+        self._chats_btn.setChecked(not self.chats_panel.isHidden())
 
         # Phone: the situation panel takes the whole width when opened,
         # so start with it closed
@@ -275,7 +296,7 @@ class MainWindow(QMainWindow):
         elif not self._has_situation_data():
             # Desktop: a panel of empty "—" rows is just noise on a fresh start
             self.sidebar.hide()
-        self._sidebar_btn.setChecked(self.sidebar.isVisibleTo(self))
+        self._sidebar_btn.setChecked(not self.sidebar.isHidden())
 
         main_layout.addWidget(self.splitter, 1)   # chat takes all spare height
 
@@ -311,7 +332,19 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(16, 0, 12, 0)
         layout.setSpacing(4)
 
-        # Left: name and day
+        # Left: icon, name and day
+        icon_path = os.path.join("assets", "icon.png")
+        if os.path.exists(icon_path):
+            from PySide6.QtGui import QPixmap
+            logo = QLabel()
+            logo.setObjectName("headerLogo")
+            pix = QPixmap(icon_path)
+            dpr = self.devicePixelRatioF() or 1.0
+            pix = pix.scaled(int(26 * dpr), int(26 * dpr), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            pix.setDevicePixelRatio(dpr)
+            logo.setPixmap(pix)
+            layout.addWidget(logo)
+            layout.addSpacing(8)
         name = (self.config.assistant_name or "Prometheus").strip()
         title = QLabel(name[:1].upper() if PHONE_LAYOUT else name.upper())
         self._title_label = title
@@ -345,6 +378,8 @@ class MainWindow(QMainWindow):
             header_button("Skills", "Rebuild progress — 55 skills in 8 stages",
                           self._show_skill_tree)
             header_button("Map", "Offline world map", self._show_map)
+        self._chats_btn = header_button("Chats", "Your chats in this tab — new, search, switch",
+                                        self._toggle_chats, checkable=True)
         self._sidebar_btn = header_button("Info", "Show or hide your situation panel",
                                           self._toggle_sidebar, checkable=True)
         header_button("Settings", "Name, model, voice", self._show_settings)
@@ -421,7 +456,7 @@ class MainWindow(QMainWindow):
             return
 
         if result["missing"]:
-            pulls = "   ".join(f"ollama pull {m}" for m in result["missing"])
+            pulls = "   ".join(f"python -m core.ollama_local --pull {m}" for m in result["missing"])
             self.status_bar.showMessage(
                 f"⚠ Ollama is running but the model isn't installed. Run: {pulls} "
                 "— or pick an installed one in Settings → Model", 0
@@ -478,6 +513,10 @@ class MainWindow(QMainWindow):
         # When loading finishes, re-check Ollama so its warning isn't
         # replaced by "ready" while answers still can't be generated
         self._init_worker.finished.connect(self._check_ollama)
+        self._init_worker.finished.connect(
+            lambda: self.input_bar.set_voice_available(
+                self.stt.available,
+                self.stt.error if self.config.stt_enabled else "Voice input is off in Settings → Voice"))
         self._init_worker.start()
 
     def _load_tab(self, tab_id: str):
@@ -502,6 +541,11 @@ class MainWindow(QMainWindow):
         self._hide_messages_panel()
         self._hide_wiki_panel()
         self.chat_view.load_tab(tab)
+        self._stop_editing()
+        if self._chats_btn.isChecked() and not PHONE_LAYOUT:
+            self.chats_panel.show()
+        self.chats_panel.refresh(tab)
+        self.input_bar.set_recall([m["content"] for m in tab.history if m.get("role") == "user"])
 
         # Medical tab warning
         if tab_id == "medical":
@@ -512,15 +556,139 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle(f"Prometheus — {tab.icon} {tab.name}")
 
+    # ── Message actions (⋯ menu / right-click) ─────────────────────────────
+
+    def _on_message_action(self, action: str, msg: dict):
+        """
+        copy   → clipboard
+        edit   → your message back in the box; sending replaces it and what followed
+        retry  → drop the last reply and ask again
+        delete → remove that one message
+        """
+        from PySide6.QtWidgets import QApplication
+        tab = self.tab_manager.get_active_tab()
+        if action == "copy":
+            QApplication.clipboard().setText((msg or {}).get("content", ""))
+            self.status_bar.showMessage("Copied", 2000)
+            return
+        if not tab or msg is None:
+            return
+        if self._generating:
+            self.status_bar.showMessage("Wait for the reply to finish (or press Esc to stop it)", 4000)
+            return
+        idx = next((i for i, m in enumerate(tab.history) if m is msg), None)
+        if idx is None:
+            return
+
+        if action == "edit":
+            self._editing_msg = msg
+            self.input_bar.set_text(msg["content"])
+            self.input_bar.set_editing(True)
+            self.input_bar.focus_input()
+
+        elif action == "delete":
+            del tab.history[idx]
+            if getattr(self, "_editing_msg", None) is msg:
+                self._stop_editing()
+            self.tab_manager.save()
+            self.chat_view.load_tab(tab)
+            self.input_bar.set_recall([m["content"] for m in tab.history if m.get("role") == "user"])
+
+        elif action == "retry":
+            # Only the last reply, and only if a question came before it
+            if idx != len(tab.history) - 1 or idx == 0 or tab.history[idx - 1].get("role") != "user":
+                return
+            question = tab.history[idx - 1]["content"]
+            del tab.history[idx]
+            self.tab_manager.save()
+            self.chat_view.load_tab(tab)
+            self._generate_response(tab, question)
+
+    # ── Chats ──────────────────────────────────────────────────────────────
+
+    def _toggle_chats(self):
+        """Desktop: show/hide the left bar. Phone: swap it with the conversation."""
+        visible = self.chats_panel.isVisible()
+        if PHONE_LAYOUT:
+            self.chats_panel.setVisible(not visible)
+            self.chat_view.setVisible(visible)
+            self.input_bar.setVisible(visible)
+            if self.sidebar.isVisible():
+                self.sidebar.hide()
+                self._sidebar_btn.setChecked(False)
+            self._chats_btn.setText("Chat" if not visible else "Chats")
+        else:
+            self.chats_panel.setVisible(not visible)
+        self._chats_btn.setChecked(not visible)
+        if not visible:
+            self.chats_panel.refresh(self.tab_manager.get_active_tab())
+
+    def _after_chat_change(self, tab):
+        self.tab_manager.save()
+        self.chat_view.load_tab(tab)
+        self._stop_editing()
+        self.input_bar.set_recall([m["content"] for m in tab.history if m.get("role") == "user"])
+        self.chats_panel.refresh(tab)
+        if PHONE_LAYOUT and self.chats_panel.isVisible():
+            self._toggle_chats()             # phone: back to the conversation
+        self.input_bar.focus_input()
+
+    def _busy(self) -> bool:
+        if self._generating:
+            self.status_bar.showMessage("Wait for the reply to finish (or press Esc to stop it)", 4000)
+        return self._generating
+
+    def _new_chat(self):
+        tab = self.tab_manager.get_active_tab()
+        if not tab or self._busy():
+            return
+        tab.new_chat()
+        self._after_chat_change(tab)
+
+    def _open_chat(self, chat_id: str):
+        tab = self.tab_manager.get_active_tab()
+        if not tab or self._busy():
+            return
+        if tab.open_chat(chat_id):
+            self._after_chat_change(tab)
+
+    def _delete_chat(self, chat_id: str):
+        tab = self.tab_manager.get_active_tab()
+        if not tab or self._busy():
+            return
+        title = next((c["title"] for c in tab.all_chats() if c["id"] == chat_id), "this chat")
+        if QMessageBox.question(self, "Delete chat",
+                                f"Delete \u201c{title}\u201d? This can't be undone.",
+                                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            return
+        tab.delete_chat(chat_id)
+        self._after_chat_change(tab)
+
+    def _rename_chat(self, chat_id: str, current: str):
+        from PySide6.QtWidgets import QInputDialog
+        tab = self.tab_manager.get_active_tab()
+        if not tab:
+            return
+        title, ok = QInputDialog.getText(self, "Rename chat", "Name:", text=current)
+        if ok:
+            tab.rename_chat(chat_id, title)
+            self.tab_manager.save()
+            self.chats_panel.refresh(tab)
+
+    def _stop_editing(self):
+        self._editing_msg = None
+        self.input_bar.set_editing(False)
+
     def _show_wiki_panel(self):
         from ui.wiki_search import WikiSearchWidget
         self._hide_messages_panel()
         if not hasattr(self, "_wiki_widget"):
             self._wiki_widget = WikiSearchWidget(self.knowledge)
             self._wiki_widget.ask_about.connect(self._ask_about_article)
-            self.splitter.insertWidget(0, self._wiki_widget)
+            self.splitter.insertWidget(1, self._wiki_widget)
         self.chat_view.hide()
         self.input_bar.hide()
+        self.chats_panel.hide()            # Wikipedia isn't a chat
         self._wiki_widget.show()
         self._wiki_widget.focus_search()
         self.setWindowTitle(f"{self.config.assistant_name or 'Prometheus'} — 📖 Wikipedia")
@@ -540,7 +708,7 @@ class MainWindow(QMainWindow):
         """Show P2P messages panel instead of chat view."""
         if not hasattr(self, '_messages_widget'):
             self._messages_widget = MessagesWidget(self.p2p)
-            self.splitter.insertWidget(0, self._messages_widget)
+            self.splitter.insertWidget(1, self._messages_widget)
 
         self.chat_view.hide()
         self._messages_widget.show()
@@ -580,6 +748,16 @@ class MainWindow(QMainWindow):
         if not tab:
             return
 
+        # Sending an edited message: the conversation continues from there —
+        # the original message and everything after it are replaced
+        editing = getattr(self, "_editing_msg", None)
+        if editing is not None:
+            idx = next((i for i, m in enumerate(tab.history) if m is editing), None)
+            if idx is not None:
+                del tab.history[idx:]
+                self.chat_view.load_tab(tab)
+            self._stop_editing()
+
         # Check domain isolation — suggest redirect if query belongs elsewhere
         redirect = suggest_redirect(text, tab.id)
         if redirect and redirect != tab.id:
@@ -597,10 +775,21 @@ class MainWindow(QMainWindow):
                 not self._generating):
             self._maybe_suggest_tab(text, suggested)
 
+        # Learn what they say about themselves ("my sister Kate", "I live in
+        # Cork") — shown briefly so nothing is learned silently
+        from core.profile import learn
+        # (shown once the reply is done, so the "thinking" status doesn't hide it)
+        learned = learn(text, self.memory)
+        self._learned_note = ("Remembered: " + "; ".join(learned) +
+                              "  (Settings → You to change)") if learned else ""
+
         # Add user message
         tab.add_message("user", text)
         self.chat_view.add_message("user", text)
+        self.chat_view.attach_last(tab.history[-1])
+        self.input_bar.remember_sent(text)
         self.tab_manager.save()
+        self.chats_panel.refresh(tab)
 
         # Clear input
         self.input_bar.clear_input()
@@ -695,6 +884,7 @@ class MainWindow(QMainWindow):
         timing = self._finish_trace(text, tab)
         self.chat_view.finish_assistant_message(**timing)
         tab.add_message("assistant", text)
+        self.chat_view.attach_last(tab.history[-1])
         self.tab_manager.save()
 
         # No verdict asked — the engine's own three-way check already set trust
@@ -741,6 +931,7 @@ class MainWindow(QMainWindow):
             timing = self._finish_trace(prepared.clarify_text, tab)
             self.chat_view.finish_assistant_message(**timing)
             tab.add_message("assistant", prepared.clarify_text)
+            self.chat_view.attach_last(tab.history[-1])
             self.tab_manager.save()
             self._end_generation()
             return
@@ -796,11 +987,15 @@ class MainWindow(QMainWindow):
             image_paths=images or None, sources=sources or None, **timing
         )
         tab.add_message("assistant", full_response)
+        self.chat_view.attach_last(tab.history[-1])
         if self.context_mgr.should_summarize(tab):
             QTimer.singleShot(1000, lambda: self._background_summarize(tab))
         self.tab_manager.save()
+        self.chats_panel.refresh(tab)
         self._end_generation()
-        self.status_bar.showMessage("", 0)
+        note = getattr(self, "_learned_note", "")
+        self._learned_note = ""
+        self.status_bar.showMessage(note, 8000 if note else 0)
 
     def _background_summarize(self, tab: Tab):
         """Summarize old context in background without blocking UI."""
@@ -849,7 +1044,12 @@ class MainWindow(QMainWindow):
         Force-stop any current generation immediately.
         Resets all state. Used when model is stuck or
         user wants to abort a response in progress.
+        Escape while editing a message (and nothing generating) cancels the edit.
         """
+        if not self._generating and getattr(self, "_editing_msg", None) is not None:
+            self._stop_editing()
+            self.input_bar.clear_input()
+            return
         # Ignore any late signals from the stopped query
         self._generation_id += 1
 
@@ -906,13 +1106,13 @@ class MainWindow(QMainWindow):
         tab = self.tab_manager.get_active_tab()
         tab_name = tab.name if tab else "Tab"
 
-        clear_tab_btn = QPushButton(f"🗑  Clear {tab_name} conversation history")
+        clear_tab_btn = QPushButton(f"🗑  Clear this {tab_name} chat")
         clear_tab_btn.setObjectName("navBtn")
         clear_tab_btn.clicked.connect(lambda: self._reset_tab(dialog))
         layout.addWidget(clear_tab_btn)
 
         # Reset all tab conversations
-        clear_all_tabs_btn = QPushButton("🗑  Clear all conversation history")
+        clear_all_tabs_btn = QPushButton("🗑  Clear all chats in every tab")
         clear_all_tabs_btn.setObjectName("navBtn")
         clear_all_tabs_btn.clicked.connect(lambda: self._reset_all_tabs(dialog))
         layout.addWidget(clear_all_tabs_btn)
@@ -943,6 +1143,7 @@ class MainWindow(QMainWindow):
         self.backup.backup(label="pre_tab_reset")
         self.tab_manager.clear_tab(tab.id)
         self.chat_view.load_tab(tab)
+        self.chats_panel.refresh(tab)
         if parent_dialog:
             parent_dialog.accept()
         self.status_bar.showMessage(
@@ -953,17 +1154,18 @@ class MainWindow(QMainWindow):
         """Clear all tab conversation histories."""
         reply = QMessageBox.question(
             self, "Clear all conversations",
-            "Clear history from all tabs?",
+            "Delete every chat in every tab?",
             QMessageBox.Yes | QMessageBox.No
         )
         if reply != QMessageBox.Yes:
             return
         self.backup.backup(label="pre_all_tabs_reset")
         for tab in self.tab_manager.tabs:
-            self.tab_manager.clear_tab(tab.id)
+            self.tab_manager.clear_tab(tab.id, every_chat=True)
         tab = self.tab_manager.get_active_tab()
         if tab:
             self.chat_view.load_tab(tab)
+            self.chats_panel.refresh(tab)
         if parent_dialog:
             parent_dialog.accept()
         self.status_bar.showMessage("✓ All conversations cleared", 3000)
@@ -1001,10 +1203,11 @@ class MainWindow(QMainWindow):
         self.memory.reset()
         self.training_graph.reset()
         for tab in self.tab_manager.tabs:
-            self.tab_manager.clear_tab(tab.id)
+            self.tab_manager.clear_tab(tab.id, every_chat=True)
         tab = self.tab_manager.get_active_tab()
         if tab:
             self.chat_view.load_tab(tab)
+            self.chats_panel.refresh(tab)
         self.sidebar.refresh()
         self._day_label.setText(self._get_day_string())
         if parent_dialog:
@@ -1034,10 +1237,12 @@ class MainWindow(QMainWindow):
 
     def _show_settings(self):
         from ui.settings_dialog import SettingsDialog
-        dialog = SettingsDialog(self.config, self.memory, self)
+        dialog = SettingsDialog(self.config, self.memory, self, obsidian_sync=self._obsidian_sync)
         dialog.exec()
         self.memory.save()
         self.config.save()
+        from core import obsidian
+        obsidian.set_vault(self.config.obsidian_vault, self.config.obsidian_use_notes)
         # Apply changes now — no restart needed
         self._apply_assistant_name()
         self.llm.base_url = self.config.ollama_url.rstrip("/")
@@ -1053,12 +1258,30 @@ class MainWindow(QMainWindow):
             return f"  {name} · Day {day}  "
         return f"  Day {day}  "
 
+    def _obsidian_sync(self) -> str:
+        """Read back Me.md edits, then write the mind map. Returns a status line."""
+        from core import obsidian
+        if not obsidian.vault_path():
+            return "Choose your Obsidian vault folder first."
+        try:
+            msg = obsidian.sync(self.memory, self.tab_manager, self.config.assistant_name or "Prometheus")
+        except Exception as e:
+            return f"Couldn't write to the vault: {e}"
+        self.tab_manager.save()
+        self.sidebar.refresh()
+        return msg
+
     def closeEvent(self, event):
         self.tts.shutdown()
         self.p2p.stop()
+        # Stop the Ollama we started for prometheus/models (never anyone else's)
+        from core import ollama_local
+        ollama_local.stop()
         self.tab_manager.save()
         self.memory.save()
         self.config.save()
+        # Write the Obsidian mind map (only changed notes)
+        self._obsidian_sync()
         # Silent backup on every close
         self.backup.backup(label=f"day{self.memory.data['user']['day_count']}")
         event.accept()

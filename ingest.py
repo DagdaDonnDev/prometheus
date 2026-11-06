@@ -530,12 +530,10 @@ class Ingester:
         reindexed = {(c["domain"], c["source"]) for c in self.all_chunks}
         existing = [c for c in existing
                     if (c.get("domain"), c.get("source")) not in reindexed]
-        # Wikipedia is huge and lowest-trust: when the vector DB holds it, keep it
-        # out of the keyword index (that index is loaded into RAM at startup)
-        new_chunks = self.all_chunks
-        if self.collection is not None:
-            new_chunks = [c for c in new_chunks if c.get("domain") != "wikipedia"]
-            existing = [c for c in existing if c.get("domain") != "wikipedia"]
+        # Wikipedia never goes in the keyword index (it's loaded into RAM at
+        # startup); its own full-text search covers it
+        new_chunks = [c for c in self.all_chunks if c.get("domain") != "wikipedia"]
+        existing = [c for c in existing if c.get("domain") != "wikipedia"]
         existing.extend(new_chunks)
         fallback_path.write_text(json.dumps(existing))
         print(f"✓ Saved {len(existing)} chunks to JSON fallback")

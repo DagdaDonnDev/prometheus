@@ -9,14 +9,18 @@ from typing import Optional
 
 
 CONFIG_PATH = "memory/config.json"
+DEFAULT_MODEL = "hf.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF:latest"
 
 
 @dataclass
 class Config:
     # Model settings
-    llm_model: str = "llama3.2:3b"          # default — smooth streaming, good reasoning
-    companion_model: str = "llama3.2:3b"    # companion tab — can set higher quality here
-    fast_model: str = "llama3.2:3b"         # knowledge tabs — can set smaller here
+    # Default: LFM2.5 1.2B Instruct — fast and good on a modest PC/GPU.
+    # Get it with:  python -m core.ollama_local --pull hf.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF:latest
+    # (kept in prometheus/models — see core/ollama_local.py)
+    llm_model: str = DEFAULT_MODEL           # summaries, checks (mirrors fast_model)
+    companion_model: str = DEFAULT_MODEL     # chat tab
+    fast_model: str = DEFAULT_MODEL          # knowledge tabs
     stt_model: str = "tiny"
     tts_voice: str = ""
     ollama_url: str = "http://localhost:11434"
@@ -45,6 +49,11 @@ class Config:
     # Assistant — what it's called and how it comes across (Settings → Assistant)
     assistant_name: str = "Prometheus"
     assistant_persona: str = ""   # e.g. "a calm old sailor who's seen a lot" — empty = plain friend
+
+    # Obsidian (Settings → Obsidian): the vault folder, and whether your own
+    # notes there are used as a source
+    obsidian_vault: str = ""
+    obsidian_use_notes: bool = True
 
     # User
     user_name: Optional[str] = None

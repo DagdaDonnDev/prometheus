@@ -245,6 +245,9 @@ class ConfidenceScorer:
             "scientific_reference": "Scientific Reference (laws and constants)",
             "personal":           "Personal Document",
         }
+        # Your Obsidian notes keep their own name ("Obsidian — Sourdough Starter")
+        if source.startswith("Obsidian — "):
+            return source
         # Try exact match first, then domain, then clean up source string
         label = labels.get(source) or labels.get(domain)
         if label:

@@ -77,6 +77,7 @@ HIDDEN_IMPORTS = [
 
 # Data files to bundle inside the exe
 DATAS = [
+    ("assets/icon.png", "assets"),
     ("ui/style.qss", "ui"),
     ("ui/*.py", "ui"),
     ("core/*.py", "core"),
@@ -138,20 +139,32 @@ def clean_build():
 
 
 def create_assets():
-    """Create placeholder assets if they don't exist."""
-    assets = Path("assets")
-    assets.mkdir(exist_ok=True)
+    """
+    Make the platform icon files from assets/icon.png (the one to edit).
 
-    # Create a simple SVG icon if no icon exists
-    svg_icon = assets / "icon.svg"
-    if not svg_icon.exists():
-        svg_icon.write_text("""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <rect width="100" height="100" fill="#1a1a1a" rx="15"/>
-  <text x="50" y="70" text-anchor="middle" font-size="60" fill="#f0a500">⚡</text>
-</svg>""")
-
-    # Note: For production, replace with proper .ico/.icns files
-    # Tools: ImageMagick, iconutil (mac), or online converters
+    Step 1: no icon.png → nothing to do (the build uses no icon)
+    Step 2: icon.ico (Windows, several sizes) and icon.icns (macOS) from it,
+            whenever icon.png is newer
+    """
+    png = Path(ICON_LINUX)
+    if not png.exists():
+        print("  (no assets/icon.png — building without an icon)")
+        return
+    try:
+        from PIL import Image
+    except ImportError:
+        print("  (pip install pillow to turn assets/icon.png into .ico/.icns)")
+        return
+    img = Image.open(png).convert("RGBA")
+    for target, kwargs in ((Path(ICON_WINDOWS), {"sizes": [(s, s) for s in (16, 24, 32, 48, 64, 128, 256)]}),
+                           (Path(ICON_MAC), {})):
+        if target.exists() and target.stat().st_mtime >= png.stat().st_mtime:
+            continue
+        try:
+            img.save(target, **kwargs)
+            print(f"  ✓ {target}")
+        except Exception as e:
+            print(f"  (couldn't write {target}: {e})")
 
 
 def build_spec(onefile: bool = True) -> str:
@@ -343,7 +356,7 @@ PROMETHEUS SETUP
 ================
 
 1. Install Ollama from: https://ollama.ai
-   Then run: ollama pull llama3.2:3b
+   Then run: ollama pull hf.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF
 
 2. Download source materials:
    Copy bootstrap.py into this folder and run:

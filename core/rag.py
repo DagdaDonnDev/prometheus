@@ -17,6 +17,12 @@ VECTOR_DB_PATH = "memory/chroma_db"
 FALLBACK_PATH = "memory/chunks_fallback.json"
 
 
+# Never loaded into memory at startup. Wikipedia has its own title lookup and
+# full-text search (core/wiki_lookup, core/wiki_index); reading every extracted
+# article here froze the app before its window appeared.
+SKIP_IN_MEMORY = {"wikipedia"}
+
+
 class KnowledgeBase:
     def __init__(self):
         self.embedder        = None
@@ -50,9 +56,10 @@ class KnowledgeBase:
         """Load pre-chunked JSON fallback for keyword search."""
         if Path(FALLBACK_PATH).exists():
             try:
-                self._fallback_chunks = json.loads(
-                    Path(FALLBACK_PATH).read_text()
-                )
+                self._fallback_chunks = [
+                    c for c in json.loads(Path(FALLBACK_PATH).read_text())
+                    if c.get("domain") not in SKIP_IN_MEMORY
+                ]
                 return
             except Exception:
                 pass
@@ -63,8 +70,8 @@ class KnowledgeBase:
             return
 
         for domain_dir in kb_path.iterdir():
-            if not domain_dir.is_dir():
-                continue
+            if not domain_dir.is_dir() or domain_dir.name in SKIP_IN_MEMORY:
+                continue        # Wikipedia: hundreds of thousands of files — it has its own search
             domain = domain_dir.name
 
             for file_path in domain_dir.rglob("*"):
@@ -237,6 +244,18 @@ class KnowledgeBase:
             if personal:
                 all_results = personal + all_results
 
+        # ── Your Obsidian notes (not for strict/medical questions) ────────
+        # Ranked with the tab's own shelf (tier 1): they're about your situation
+        if not getattr(plan, "is_strict", False) and "medical" not in (plan.tier1_domains or []):
+            from core.obsidian import search_notes
+            try:
+                notes = search_notes(query, n=2)
+            except Exception:
+                notes = []
+            if notes:
+                all_results = notes + all_results
+                tier_results.setdefault("tier1", []).extend(notes)
+
         is_critical = self.redundancy.is_critical(
             plan.tier1_domains[0] if plan.tier1_domains else "general",
             query
@@ -305,6 +324,8 @@ class KnowledgeBase:
                     conf["score"] = min(100, conf["score"] + 15)
                 elif tier == "tier3":
                     conf["score"] = max(0, conf["score"] - 10)
+            if r.get("title_hit"):              # an Obsidian note named after the question
+                conf["score"] = max(conf["score"], 80)
             scored.append({**r, "confidence": conf, "_tier": tier})
 
         # Sort: tier1 boosted scores first

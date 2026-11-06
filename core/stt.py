@@ -17,32 +17,49 @@ class STTEngine:
         self.enabled = config.stt_enabled
         self.model = None
         self.available = False
+        self.error = ""            # why it isn't available, in plain words
         self._recording = False
         self._audio_data = []
 
     def initialize(self, status_callback: Optional[Callable] = None):
-        """Load Whisper model. Called after UI shown."""
+        """
+        Load the Whisper model. Called after the window is shown.
+
+        Step 1: faster-whisper must be installed (python setup_voice.py)
+        Step 2: use models/whisper/<size> if setup_voice.py downloaded it
+                (works offline); otherwise let faster-whisper fetch it into
+                models/whisper_cache the first time
+        Step 3: any failure → voice input off, with the reason in self.error
+        """
+        say = status_callback or (lambda _m: None)
         try:
             from faster_whisper import WhisperModel
+        except Exception as e:
+            self.available = False
+            self.error = ("faster-whisper not installed — run: python setup_voice.py"
+                          if isinstance(e, ImportError) else f"faster-whisper won't load: {e}")
+            say(self.error)
+            return
 
-            if status_callback:
-                status_callback("Loading speech recognition model...")
-
+        from core.paths import PROJECT_DIR
+        size = self.config.stt_model or "tiny"
+        local = PROJECT_DIR / "models" / "whisper" / size
+        say("Loading speech recognition model...")
+        try:
             self.model = WhisperModel(
-                self.config.stt_model,
+                str(local) if (local / "model.bin").is_file() else size,
                 device="cpu",
                 compute_type="int8",
-                download_root="memory/model_cache"
+                download_root=str(PROJECT_DIR / "models" / "whisper_cache"),
             )
             self.available = True
-
-            if status_callback:
-                status_callback("Speech recognition ready.")
-
-        except ImportError:
-            if status_callback:
-                status_callback("faster-whisper not installed. Voice input disabled.")
+            self.error = ""
+            say("Speech recognition ready.")
+        except Exception as e:
+            self.model = None
             self.available = False
+            self.error = f"Whisper model '{size}' couldn't load ({e}) — run: python setup_voice.py"
+            say(self.error)
 
     def transcribe_file(self, audio_path: str) -> str:
         """Transcribe an audio file to text."""

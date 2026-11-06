@@ -210,8 +210,7 @@ class VoiceManager:
     def status_summary(self) -> str:
         """Human-readable status for settings/status bar."""
         if not self.piper_available():
-            return ("Piper not found — download the release for your system from "
-                    "github.com/rhasspy/piper/releases and unzip it into prometheus_setup/")
+            return "Piper not found — run: python setup_voice.py"
         if not self._voices:
             return "No voices found — add folders to voices/"
         names = ", ".join(self.names())

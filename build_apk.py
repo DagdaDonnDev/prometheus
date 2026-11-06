@@ -68,7 +68,7 @@ EXTRA_PERMISSIONS = [
 
 # Never packed: personal data, build output, dev-only folders
 EXCLUDE_DIRS = [
-    "memory", "voices", "tests", "bin", "build", "dist", "wheels",
+    "memory", "models", "piper", "voices", "tests", "bin", "build", "dist", "wheels",
     ".github", ".buildozer", "deployment", "prometheus_setup", "__pycache__",
 ]
 
@@ -167,6 +167,11 @@ def _patch_buildozer_config(scripts: Path):
             merge("source.exclude_dirs", EXCLUDE_DIRS)
             self.set_value("app", "title", APP_NAME, raise_warning=False)
             self.set_value("app", "orientation", "portrait", raise_warning=False)
+            # App icon and launch screen from assets/icon.png
+            icon = ROOT / "assets" / "icon.png"
+            if icon.exists():
+                self.set_value("app", "icon.filename", str(icon), raise_warning=False)
+                self.set_value("app", "presplash.filename", str(icon), raise_warning=False)
             self.update_config()
 
     bz.BuildozerConfig = PrometheusBuildozerConfig

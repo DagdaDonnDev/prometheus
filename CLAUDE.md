@@ -1,11 +1,11 @@
 # Prometheus — working notes
 
-Offline AI survival and rebuilding companion. PySide6 desktop app, Llama 3.2 3B
+Offline AI survival and rebuilding companion. PySide6 desktop app, LFM2.5 1.2B Instruct (default)
 through Ollama, ChromaDB + sentence-transformers retrieval (JSON keyword fallback),
 Piper TTS, Faster-Whisper STT. No network after setup.
 
 ## Run and test
-- `python main.py` (needs `ollama serve` and `ollama pull llama3.2:3b`)
+- `python main.py` (needs Ollama installed and the default model in prometheus/models: `python -m core.ollama_local --move` or `--pull hf.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF:latest`)
 - `python -m unittest discover tests` — Training Path (no Ollama, no Qt)
 - `python -c "from core.eval_harness import EvalHarness; EvalHarness().run_all()"` — 22 decision-layer checks, must stay 22/22
 - Both run from the Dev Panel (Ctrl+D → Eval)
@@ -115,8 +115,78 @@ Decision layers live in `core/pipeline.py` (`QueryPipeline`, no Qt). The window 
 - Full-text: `core/wiki_index` (SQLite FTS5, porter, title weight 10, last word prefix,
   AND then OR fallback) → `knowledge_base/wikipedia_search.sqlite`. Built after every extraction and by
   `ingest.py --wiki-index`. 50k articles: 3 s build, ~25–65 ms per search.
+- NEVER load Wikipedia into memory at startup: `rag.SKIP_IN_MEMORY` skips the folder in the raw-file
+  scan and filters it from chunks_fallback.json; ingest never writes it there. (Owner had no JSON →
+  raw scan read every extracted article on the UI thread → window never appeared.) InitWorker pre-lists titles.
 - Wikipedia tab = tab 2 (`id="wikipedia"`, not a chat): `ui/wiki_search.py`, search on a QThread,
   title ranking + vector matches when indexed; "Ask about this" → chat tab "Tell me about <title>".
+
+## Chat behaviour (2026-11-06)
+- Default model in code: `config.DEFAULT_MODEL` = hf.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF:latest
+  (setup.bat/.sh pull it). The owner's real log after the localhost fix: speak-start 100–500 ms.
+- Tone: `core/tone.detect_tone(text, previous)` → annoyed/low/excited/curious/neutral → one
+  "Right now: …" line LAST in the companion prompt + intent `chat_<tone>` → INTENT_TEMPERATURE.
+  The model can't read tone itself (owner: "too friendly, like an actor").
+- Missing things: `wiki_lookup.asked_about` (specific named thing) + no article →
+  "NOT IN YOUR LIBRARY: … say 'I don't have X in my database'". Errs toward not firing.
+- Messages: Up/Down recall in `ExpandingTextEdit`; bubbles carry `.msg` (tab-history dict, by
+  identity) → ⋯/right-click actions copy/edit/retry/delete handled in `MainWindow._on_message_action`.
+  Edit + send deletes from that message on, then sends. Esc cancels an edit when idle.
+
+## Chats (2026-11-06)
+- `Tab.history/summary` = the CURRENT chat (rest of the app unchanged); `chat_id/chat_title/chat_created`
+  describe it; `Tab.chats` = saved chat records {id,title,created,updated,history,summary}.
+  `new_chat()` archives (only if non-empty) and empties; `open_chat/delete_chat/rename_chat/all_chats(query)`.
+- `ui/chats_panel.py` = left column of the splitter (chats | chat_view | sidebar). Hidden on the
+  Wikipedia tab; phone swaps it with chat_view. Refresh after send/response/switch/reset.
+  Button checked state uses `not isHidden()` (isVisibleTo is wrong before the window is shown).
+- `clear_tab(id)` empties the open chat; `every_chat=True` also drops saved chats.
+
+## Profile (2026-11-06)
+- `core/profile.learn(text, memory)` — regex only, on every user message (`_on_send`), errs toward
+  nothing. Writes `user.name/location_estimate/work/mentioned_people ("Kate (sister)")/likes/
+  dislikes/known_skills`. Returned notes → status bar after the reply ("Remembered: …").
+- Companion prompt adds `about_line` (≤55 words) + `earlier_topics(tab)` (last 3 chat TITLES only).
+  Tone line stays last. Settings → You edits every field (empty box clears it).
+
+## Obsidian (2026-11-06) — core/obsidian.py, no Qt
+- `config.obsidian_vault/obsidian_use_notes`; `obsidian.set_vault()` at startup + after Settings.
+- `sync(memory, tab_manager)` (close + Settings → Obsidian → Update now): read back Me.md → write
+  <vault>/Prometheus/{Me, <Tab>, Chats/*, Topics/*}.md, only changed files; links are full paths
+  `[[Prometheus/…|label]]`. Removes notes it wrote earlier only if still byte-identical.
+  State (last Me text/props, written files) in memory/obsidian_state.json.
+- Me.md read-back: scalars → file wins; lists → 3-way merge vs last written props (removed in
+  Obsidian = removed, learned in app meanwhile = kept). Own tiny YAML subset (no PyYAML).
+- Own notes (outside Prometheus/ and dot-folders), cached, re-listed ≤ every 30 s:
+  `search_notes` → rag `_tiered_search` as tier 1 (not strict, not medical); `title_hit` → score ≥80.
+  `notes_named_in` → companion "From their own notes" (and suppresses the not-in-library rule).
+
+## Model folder (2026-11-06) — core/ollama_local.py, stdlib only
+- Models live in `prometheus/models` (gitignored, excluded from the APK). When it has a manifest,
+  `OllamaCheckWorker` calls `ollama_local.start()` → own `ollama serve` with OLLAMA_MODELS=models,
+  OLLAMA_HOST=127.0.0.1:11435; `LLMEngine._candidate_urls` tries it first; closeEvent stops only ours.
+- `--move`: copies manifest + blobs (SHA-256 checked, `.partial` then rename, manifest last), then
+  removes the old copy like `ollama rm` (blobs other manifests use are kept; if a blob is locked the
+  manifest stays so a re-run finishes). `--pull`, `--has`, `--list`. setup.bat/sh: move, else pull.
+- Local HTTP checks use a no-proxy opener (a system proxy swallowed 127.0.0.1 requests).
+
+## Voice (2026-11-06)
+- `setup_voice.py`: pip faster-whisper + sounddevice (checked separately) → Whisper model into
+  models/whisper/<size> (`faster_whisper.utils.download_model`) → Piper release zip/tar into
+  prometheus/piper/ (gitignored, APK-excluded) → voices/ (copies from setup_dir if empty) →
+  round trip (Piper speaks TEST_SENTENCE, Whisper transcribes) → microphones. `--check` = no downloads.
+- `STTEngine.initialize`: local model dir first, any failure → `available=False` + `error`.
+  Mic button: `InputBar.set_voice_available()` after InitWorker (it used to stay disabled forever).
+- `TTSEngine`: one persistent Piper (`_PiperProcess`, `--json-input`, absolute model path, prints
+  the wav path per line), synth thread + player thread (next sentence made while one plays),
+  warm-up at start. Cuts at sentence ends; first piece may end at a comma (>25 chars); >220 chars
+  cut anywhere. `clean_for_speech` strips markdown. Measured: gaps 1.6 s → 0, first sound 0.45 → 0.24 s.
+- Sandbox: GitHub reachable (Piper + rhasspy/piper etc/test_voice.onnx), Hugging Face blocked.
+
+## Icon
+- `assets/icon.png` (owner's design: open hand, flame above, navy square). main.py setWindowIcon +
+  Windows AppUserModelID; header logo 26px; build_exe makes .ico/.icns (Pillow, gitignored);
+  build_apk sets icon.filename + presplash.filename.
 
 ## Repo hygiene
 - `.gitattributes` keeps `setup.bat` CRLF and `setup.sh` LF; `setup.sh` is committed executable.
@@ -136,4 +206,5 @@ Decision layers live in `core/pipeline.py` (`QueryPipeline`, no Qt). The window 
 
 ## Known gaps
 - Voice (Piper, Faster-Whisper) is desktop-only; Android shows no voice.
+- Whisper transcription untested here (model download blocked); setup_voice.py's round trip checks it on the owner's PC.
 - APK build not yet run end to end (needs the owner's wheels + NDK).
