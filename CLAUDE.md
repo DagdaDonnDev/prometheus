@@ -5,11 +5,27 @@ through Ollama, ChromaDB + sentence-transformers retrieval (JSON keyword fallbac
 Piper TTS, Faster-Whisper STT. No network after setup.
 
 ## Run and test
-- `python main.py` (needs Ollama installed and the default model in prometheus/models: `python -m core.ai.ollama_local --move` or `--pull hf.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF:latest`)
+- From `app/`: `python main.py` (needs Ollama installed and the default model in prometheus/models: `python -m core.ai.ollama_local --move` or `--pull hf.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF:latest`)
 - `python -m unittest discover tests` — Training Path (no Ollama, no Qt)
 - `python -c "from core.answers.eval_harness import EvalHarness; EvalHarness().run_all()"` — 22 decision-layer checks, must stay 22/22
 - Both run from the Dev Panel (Ctrl+D → Eval)
 - Offscreen UI check: `QT_QPA_PLATFORM=offscreen`, patch `LLMEngine.stream/complete`
+
+## Top folder + Prometheus.exe (2026-11-09)
+- Repo root = `Prometheus.exe` (committed, ~60 KB), `prometheus.sh`, README.md, CLAUDE.md, .gitignore
+  (.venv/prometheus_setup), .gitattributes, and `app/` = everything else (its own .gitignore).
+  Run commands and tests from `app/`. `PROJECT_DIR` = app/. `setup_dir()` also checks app/../..
+  (owner's prometheus_setup sits beside the prometheus folder).
+- Exe = `app/tools/launcher/prometheus_launcher.c` + `prometheus.rc` (icon, version info), built by
+  `app/tools/build_exe.py` (Pillow → assets/icon.ico 10 sizes; x86_64-w64-mingw32 gcc/windres;
+  `-municode -mwindows -static`). Runs app\runtime\python\pythonw.exe (if PySide6 is in it) →
+  pythonw on PATH → python/py (CREATE_NO_WINDOW), cwd app, PYTHONUTF8=1, args passed; exits ≠0
+  within 8 s → MessageBox + opens app\. Tested under wine64 (sandbox: apt gcc-mingw-w64-x86-64 wine64,
+  run /usr/lib/wine/wine64). The old PyInstaller freeze is gone (it excluded torch anyway).
+- `app/tools/move_into_app.py [--check]`: owner's one-time migration (moves top-level entries into
+  app/, deletes top copies where app/ has the file, drops Prometheus.bat/__pycache__; STAY = .git,
+  .venv, prometheus_setup …). A folder Windows won't rename (a file in it open — owner hit WinError 5 on
+  voices/) is merged file by file; files still in use are listed, exit 1, re-run continues. make_portable step 5 writes ../prometheus.sh, checks ../Prometheus.exe.
 
 ## Layout (reorganised 2026-11-09)
 - Root: main.py, launchers, setup/debug .bat/.sh, docs. `tools/` = runnable scripts (each chdirs to

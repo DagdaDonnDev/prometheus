@@ -119,6 +119,9 @@ if errorlevel 1 (
 )
 echo [OK] Knowledge base indexed
 echo.
+echo  From now on, start Prometheus by double-clicking Prometheus.exe
+echo  (in the folder above this one).
+echo.
 echo  To download the full source library later (about 2 GB):
 echo      %PY% tools\bootstrap.py
 echo      %PY% tools\ingest.py

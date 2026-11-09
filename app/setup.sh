@@ -87,6 +87,9 @@ echo "     $PY tools/bootstrap.py"
 echo "     $PY tools/ingest.py"
 echo
 
+echo "  From now on, start Prometheus with ./prometheus.sh (in the folder above this one)."
+echo
+
 # Step 7: launch
 read -r -p "Launch Prometheus now? [Y/n] " LAUNCH
 case "${LAUNCH:-y}" in

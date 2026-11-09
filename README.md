@@ -47,11 +47,21 @@ after a second or two and then write at roughly 10–20 words a second.
 
 ## Quick Start
 
+The folder looks like this — **double-click `Prometheus.exe` to start**:
+```
+prometheus/
+├── Prometheus.exe     start it (Windows)
+├── prometheus.sh      start it (Linux / macOS / Raspberry Pi)
+├── README.md
+└── app/               everything else: code, models, books, settings, Python
+```
+The commands in this README are run **inside `app`** (`cd app` first).
+
 ### Fastest — one script does it all
 ```bash
-# Windows: double-click setup.bat
+# Windows: double-click app\setup.bat
 # Linux / macOS / Raspberry Pi:
-bash setup.sh
+bash app/setup.sh
 ```
 Both scripts check Python 3.9+ and pip, check for Ollama (Windows opens the
 download page, Linux/macOS installs it), pull the default model (LFM2.5 1.2B Instruct), install
@@ -104,7 +114,7 @@ Takes 10–30 minutes on first run. Subsequent runs only process new files.
 # Start Ollama (if not already running as a service)
 ollama serve &
 
-# Launch Prometheus
+# Launch Prometheus — or double-click Prometheus.exe
 python main.py
 ```
 
@@ -114,11 +124,14 @@ python main.py
 
 ```
 prometheus/
-├── main.py, Prometheus.bat, prometheus.sh   start it
+├── Prometheus.exe, prometheus.sh            start it
+└── app/
+├── main.py                                  what both of those run
 ├── setup.bat, setup.sh, debug_run.bat       first-time setup / a run with a saved log
 ├── tools/        commands you run: ingest (library), setup_voice, make_portable,
 │                 bootstrap (downloads), bootstrap_map, generate_reference,
-│                 build_exe, build_apk, remove_old_layout
+│                 build_exe (Prometheus.exe), build_apk, move_into_app,
+│                 remove_old_layout
 ├── core/
 │   ├── ai/       the two models and how they're prompted (llm, librarian, tone…)
 │   ├── answers/  how each reply is decided (pipeline, gates, tracer, eval)
@@ -129,20 +142,27 @@ prometheus/
 │   └── training/ working things out from first principles
 ├── ui/
 │   ├── chat/     the conversation, message box, menu, chats list
-│   ├── panels/   Info, Review, Wikipedia, Quick help
+│   ├── panels/   Info, Review, Search, Quick help
 │   ├── dialogs/  Settings, Situation check, Skills, Map, documents, developer panel
 │   └── main_window.py, style.qss (the whole look)
 ├── tests/
 └── assets/ knowledge_base/ memory/ models/ voices/   (+ ollama/ piper/ runtime/ once made portable)
 ```
 
-Updating an older copy by unzipping new files over it? Run
-`python tools/remove_old_layout.py` once afterwards — it deletes the files
-that moved (only where the new copy is in place).
+**Coming from the old layout** (main.py at the top)? Unzip the update, then
+run once from the prometheus folder:
+```bash
+python app\tools\move_into_app.py --check   # list what it will do
+python app\tools\move_into_app.py
+```
+It moves everything at the top into `app\` — models, Ollama, the portable
+Python, voices, memory, your books (instant on one drive, even for GB) — and
+deletes old copies of files the update replaced. `.git`, a `.venv` and
+`prometheus_setup` stay where they are. In git, `git add -A` records it as moves.
 
 ## Moving Prometheus to another computer
 
-One command gathers everything into the `prometheus` folder, so you can copy
+One command gathers everything into the `app` folder, so you can copy
 the folder to another computer (same system, e.g. Windows → Windows) and run it:
 
 ```bash
@@ -159,8 +179,8 @@ python tools/make_portable.py --check    # just list what's still outside
 | Python packages (Linux/macOS) | `wheels\` — installed offline on first start |
 
 Your chats, memory, settings, library and its search index are already inside
-and don't depend on where the folder is. On the new computer just run
-**`Prometheus.bat`** (or `./prometheus.sh`) — no installing. `setup.bat` and
+and don't depend on where the folder is. On the new computer just double-click
+**`Prometheus.exe`** (or run `./prometheus.sh`) — no installing. `setup.bat` and
 `debug_run.bat` use the folder's Python too. Expect the folder to be several GB.
 
 **Size.** It's meant to fit a 16 GB SD card or USB stick (about 14.5 GB as
@@ -252,21 +272,29 @@ if it doesn't.
 ## App icon
 Save the icon as **`assets/icon.png`** (square, 512×512 or larger). It's
 used for the window and taskbar, next to the name in the header, the Windows
-`.exe` (`tools/build_exe.py` makes `icon.ico`/`icon.icns` from it; needs
-`pip install pillow`) and the Android app icon and launch screen.
+`Prometheus.exe` (`tools/build_exe.py` makes `icon.ico` from it) and the
+Android app icon and launch screen.
 
 ## Building Executables
 
-### Windows / Linux / macOS — Single EXE
+### Prometheus.exe (Windows)
+`Prometheus.exe` is a small launcher (about 60 KB) with your icon. It starts
+the app from `app\` with the folder's own Python if it has one
+(`app\runtime\python`), otherwise the Python on the computer — no console
+window. If the app stops while starting (packages not installed yet, say), it
+says so and opens the `app` folder so you can run `setup.bat` or `debug_run.bat`.
+
+It's committed, so you don't build it. After changing the icon or the
+launcher (`tools/launcher/`), rebuild it with MinGW-w64 installed:
 ```bash
-pip install pyinstaller
-python tools/build_exe.py              # single .exe (default)
-python tools/build_exe.py --onedir     # folder build (faster startup)
-python tools/build_exe.py --clean      # clean previous build first
+python tools/build_exe.py
 ```
-Output: `dist/Prometheus.exe` (~150–300MB, self-contained).
-Knowledge base, voices, and memory sit alongside the exe — not bundled inside —
-so you can update knowledge without rebuilding.
+Why not the whole app in one .exe: a one-file exe unpacks itself on every
+start — with the models and library that's ~10 GB each time (and over ~4 GB
+it doesn't work at all). The launcher starts the app in place instead.
+
+Windows may show "Windows protected your PC" the first time (the exe isn't
+signed): **More info → Run anyway**.
 
 ### Android APK — same app, built with Qt for Python (shiboken6)
 The phone runs the same `main.py`, `core/` and `ui/` as desktop, so every
@@ -824,7 +852,7 @@ python3 -m pip install -r requirements.txt --break-system-packages
 
 # Auto-start on boot — add to /etc/rc.local before exit 0:
 # ollama serve &
-# sleep 5 && cd /home/pi/prometheus && python main.py &
+# sleep 5 && /home/pi/prometheus/prometheus.sh &
 ```
 
 Power: ~5W idle on Pi 5. A 20W panel + 10,000mAh bank runs it all day.
@@ -889,13 +917,18 @@ Re-running `tools/ingest.py` keeps the index matching the folder:
 
 ```
 prometheus/
+├── Prometheus.exe             # Windows: double-click to start (tools/build_exe.py)
+├── prometheus.sh              # Linux / macOS / Pi: start it
+└── app/                       # everything below
 ├── main.py                    # Entry point
 ├── setup.bat / setup.sh       # One-step install (Windows / Linux, macOS, Pi)
 ├── tools/bootstrap.py               # One-time downloader (self-deletes after use)
 ├── tools/bootstrap_map.py           # Offline map data downloader
 ├── tools/ingest.py                  # Knowledge base indexing pipeline
 ├── tools/generate_reference.py      # Printable emergency PDF generator
-├── tools/build_exe.py               # EXE builder (Windows/Linux/Mac)
+├── tools/build_exe.py               # Prometheus.exe: the launcher + icon (MinGW)
+├── tools/launcher/                  # the launcher's C source and icon/file details
+├── tools/move_into_app.py           # one-time move from the old layout
 ├── tools/build_apk.py               # APK builder (Android, pyside6-android-deploy)
 ├── requirements.txt
 ├── README.md
@@ -982,8 +1015,8 @@ prometheus/
 ```
 
 ## Debug run (temporary)
-Double-click `debug_run.bat`. It runs Prometheus normally. When you close it,
-`logs\run_<date>_<time>.log` holds your Python/PySide6/Ollama versions, the
+Double-click `app\debug_run.bat`. It runs Prometheus normally. When you close it,
+`app\logs\run_<date>_<time>.log` holds your Python/PySide6/Ollama versions, the
 installed and loaded models, your settings, everything the app printed
 (errors included) and the last 10 replies with where each wait came from —
 and what each model said: the speaker's request to the librarian, the facts the

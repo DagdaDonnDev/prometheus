@@ -144,11 +144,13 @@ class TestPortable(unittest.TestCase):
         self.assertEqual((d / "python313._pth").read_text().splitlines(), lines)
 
     def test_launchers(self):
+        # Next to the app folder: the committed exe stays, the .sh is written
+        (self.root.parent / "Prometheus.exe").write_bytes(b"MZ")
         mp.step_launchers(check=False)
-        bat = (self.root / "Prometheus.bat").read_bytes()
-        self.assertIn(b"\r\n", bat)
-        self.assertIn(b"runtime\\python\\pythonw.exe", bat)
-        self.assertTrue(os.access(self.root / "prometheus.sh", os.X_OK))
+        sh = self.root.parent / "prometheus.sh"
+        self.assertTrue(os.access(sh, os.X_OK))
+        self.assertIn('cd "$(dirname "$0")/app"', sh.read_text())
+        self.assertFalse((self.root / "Prometheus.bat").exists())
 
 
 if __name__ == "__main__":

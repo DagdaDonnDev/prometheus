@@ -1,3 +1,5 @@
 # Keep Windows line endings in batch files (cmd misreads labels/goto with LF)
 *.bat text eol=crlf
+*.c   text eol=lf
+*.exe binary
 *.sh  text eol=lf

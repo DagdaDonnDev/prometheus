@@ -1,0 +1,42 @@
+# Knowledge base: commit hand-written .md files, never downloaded books,
+# dumps, page images or the placeholder READMEs that ingest --init creates
+knowledge_base/*
+!knowledge_base/*/
+knowledge_base/*/**
+!knowledge_base/*/
+!knowledge_base/*/*.md
+knowledge_base/*/README.md
+knowledge_base/wikipedia/
+memory/
+models/
+voices/
+prometheus_setup/
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.DS_Store
+Thumbs.db
+
+# Android build (pyside6-android-deploy)
+*.apk
+*.aab
+buildozer.spec
+pysidedeploy.spec
+.buildozer/
+deployment/
+wheels/
+.pyside6_android_deploy/
+
+# debug_run.bat output
+logs/
+
+# Made from assets/icon.png by build_exe.py
+assets/icon.ico
+assets/icon.icns
+piper/
+
+# make_portable.py: copies kept inside the folder, never committed
+runtime/
+ollama/

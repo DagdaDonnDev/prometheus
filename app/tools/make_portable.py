@@ -18,7 +18,7 @@ Step 4  Python         Windows: Python's official portable build → prometheus/
                        with every package Prometheus needs installed into it (needs
                        internet this once). Other systems: the packages are saved to
                        prometheus/wheels so a new machine can install them offline.
-Step 5  Launchers      Prometheus.bat / prometheus.sh start it with the copies above
+Step 5  Launchers      Prometheus.exe / prometheus.sh (next to app/) start it with the copies above
 Step 6  Report         folder size, and anything still outside (an Obsidian vault, say)
 
 Your chats, memory, settings, library and its search index are already inside
@@ -367,24 +367,12 @@ def _install_packages(exe: Path) -> bool:
 
 # ── Step 5 ──────────────────────────────────────────────────────────────────
 
-LAUNCH_BAT = r"""@echo off
-REM Start Prometheus with what's inside this folder (made by tools\make_portable.py).
-REM Uses runtime\python if it's set up (its packages installed), otherwise the
-REM Python on this computer.
-cd /d "%~dp0"
-set PYTHONUTF8=1
-if exist "runtime\python\Lib\site-packages\PySide6\" (
-    start "" "runtime\python\pythonw.exe" main.py %*
-) else (
-    python main.py %*
-)
-"""
-
 LAUNCH_SH = """#!/usr/bin/env bash
-# Start Prometheus with what's inside this folder (made by tools/make_portable.py).
-cd "$(dirname "$0")"
+# Start Prometheus (Linux, macOS, Raspberry Pi). Everything it needs is in app/.
+# On Windows, double-click Prometheus.exe instead.
+cd "$(dirname "$0")/app"
 if [ -d wheels ] && ! python3 -c "import PySide6" 2>/dev/null; then
-    echo "First run on this machine: installing packages from ./wheels (offline)"
+    echo "First run on this machine: installing packages from app/wheels (offline)"
     python3 -m pip install --no-index --find-links wheels -r requirements.txt
 fi
 exec python3 main.py "$@"
@@ -392,13 +380,22 @@ exec python3 main.py "$@"
 
 
 def step_launchers(check: bool):
+    """
+    Next to the app folder: Prometheus.exe (committed — tools/build_exe.py
+    makes it) for Windows, prometheus.sh for Linux/macOS.
+    """
+    top = ROOT.parent
+    exe = top / "Prometheus.exe"
     if check:
+        (ok if exe.exists() else bad)(f"Prometheus.exe {'is' if exe.exists() else 'is missing'} next to the app folder")
         return
-    (ROOT / "Prometheus.bat").write_text(LAUNCH_BAT.replace("\n", "\r\n"), encoding="ascii", newline="")
-    sh = ROOT / "prometheus.sh"
+    sh = top / "prometheus.sh"
     sh.write_text(LAUNCH_SH, encoding="utf-8", newline="\n")
     sh.chmod(0o755)
-    ok("Launchers: Prometheus.bat (Windows), prometheus.sh (Linux/macOS)")
+    if exe.exists():
+        ok("Launchers: Prometheus.exe (Windows), prometheus.sh (Linux/macOS)")
+    else:
+        bad("Prometheus.exe is missing next to the app folder — python tools/build_exe.py makes it")
 
 
 # ── Step 6 ──────────────────────────────────────────────────────────────────
@@ -439,8 +436,9 @@ def main() -> int:
     step_launchers(check)
     step_report()
     if all(results):
-        print("\nReady to move: copy the whole prometheus folder and run Prometheus.bat"
-              if os.name == "nt" else "\nReady to move: copy the whole prometheus folder and run ./prometheus.sh")
+        print("\nReady to move: copy the whole prometheus folder (Prometheus.exe + app) and "
+              "double-click Prometheus.exe" if os.name == "nt" else
+              "\nReady to move: copy the whole prometheus folder and run ./prometheus.sh")
         return 0
     print("\nNot everything is inside yet — see the lines above." +
           ("" if check else " Fix those and run this again."))
