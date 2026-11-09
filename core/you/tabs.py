@@ -333,11 +333,12 @@ DEFAULT_TABS = [
             "Be that person completely."
         )
     ),
-    # Tab 2: search and read the offline Wikipedia (not a chat)
+    # Tab 2: search your books, notes and Wikipedia (not a chat; the id stays
+    # "wikipedia" so saved settings keep working)
     Tab(
         id="wikipedia",
-        name="Wikipedia",
-        icon="📖",
+        name="Search",
+        icon="🔍",
         domains=["wikipedia"],
         system_prompt="",
     ),

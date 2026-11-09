@@ -50,13 +50,41 @@ class TestLibrarian(unittest.TestCase):
         f = Librarian(FakeLLM(facts="NOT FOUND")).extract("Who is BT?", [("x", "unrelated text")])
         self.assertFalse(f.found)
         self.assertFalse(f.failed)
-        self.assertIn("nothing that answers this", facts_block(f))
+        self.assertIn("Nothing in the library covers this", facts_block(f))
 
     def test_unreachable_librarian_is_not_not_found(self):
         f = Librarian(FakeLLM(fail=True)).extract("Q", [("x", "text")])
         self.assertTrue(f.failed)
         b = Librarian(FakeLLM(fail=True)).brief("how do i boil water")
         self.assertEqual(b.question, "how do i boil water")    # falls back to the message itself
+
+
+class TestFromTheLog(unittest.TestCase):
+    """Owner's debug log, 2026-11-09 15:24."""
+
+    def test_copied_instructions_are_not_searched(self):
+        llm = FakeLLM(brief="SEARCH: 3-8 keywords to look up (names, things, the topic)\n"
+                            "QUESTION: the person's question, written out in full on one line")
+        b = Librarian(llm).brief("what are some poisonous mushrooms in ireland")
+        self.assertEqual(b.search, "what are some poisonous mushrooms in ireland")
+
+    def test_long_keyword_lists_are_cut(self):
+        llm = FakeLLM(brief="SEARCH: halo, halo 4, halo infinite, halo: combatants, halo: combatants 2, "
+                            "xbox, game, console\nQUESTION: what is halo?")
+        self.assertLessEqual(len(Librarian(llm).brief("halo the game").search.split()), 8)
+
+    def test_relevant(self):
+        from core.ai.librarian import relevant
+        self.assertTrue(relevant("what are some posionous mushrooms in ireland with images",
+                                 "Many mushrooms are poisonous; the death cap kills."))
+        self.assertTrue(relevant("How do I make lye from wood ash?",
+                                 "Fill the container with wood ash and pour water to leach lye."))
+        self.assertFalse(relevant("halo the game", "Apply a pressure dressing to the wound."))
+        self.assertTrue(relevant("who are you", "anything"))         # nothing to judge by
+
+    def test_cited(self):
+        from core.ai.librarian import Facts
+        self.assertEqual(Facts("- a [1]\n- b [3]", True).cited(), {1, 3})
 
 
 class TestPipelineWithTwoModels(unittest.TestCase):
@@ -105,6 +133,53 @@ class TestPipelineWithTwoModels(unittest.TestCase):
         self.assertIn("LIBRARY FACTS", out.full_prompt)
         self.assertNotIn("Christopher Nolan. Inception", out.full_prompt)     # no raw article text
         self.assertTrue(out.full_prompt.rstrip().split("\n")[-1].startswith("Right now:"))
+
+    def test_not_found_but_on_the_subject_reads_the_passages(self):
+        # The soap guide has "Making Lye from Wood Ash"; the librarian said NOT FOUND
+        self.llm.facts = "NOT FOUND"
+        out = self.prepare("How do I make lye from wood ash?", "chemistry")
+        self.assertIn("FROM THE LIBRARY", out.full_prompt)
+        self.assertIn("ash", out.full_prompt.split("FROM THE LIBRARY", 1)[1].lower())
+        self.assertNotIn("Nothing in the library covers this", out.full_prompt)
+        self.assertTrue(out.sources)
+
+    def test_not_found_and_off_subject_shows_nothing(self):
+        # "halo the game" pulled a first-aid manual's cover page in as a picture
+        self.llm.facts = "NOT FOUND"
+        self.llm.brief = "SEARCH: halo game\nQUESTION: what is the game halo?"
+        with mock.patch("core.library.wiki_lookup.find_articles", return_value=[]):
+            out = self.prepare("halo the game", "survival")
+        self.assertIn("Nothing in the library covers this", out.full_prompt)
+        self.assertEqual(out.images, [])
+        self.assertEqual(out.sources, [])
+
+    def test_sources_are_the_cited_passages(self):
+        self.llm.facts = "- Boil water for 1 minute [1]"
+        out = self.prepare("how do i purify water", "survival")
+        self.assertEqual(len(out.sources), 1)
+
+    def test_chat_not_found_on_the_subject_reads_the_article(self):
+        from pathlib import Path
+        import tempfile
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        art = Path(d.name) / "Magic_The_Gathering.txt"
+        art.write_text("# Magic: The Gathering\n\nMagic: The Gathering is a trading card game "
+                       "made by Richard Garfield in 1993. Players are wizards casting spells.")
+        self.llm.facts = "NOT FOUND"
+        with mock.patch("core.library.wiki_lookup.find_articles",
+                        return_value=[("Magic: The Gathering", art)]):
+            out = self.prepare("what can you tell me about magic the gathering", "prometheus")
+        self.assertIn("Richard Garfield", out.full_prompt)
+
+    def test_who_are_you_does_not_carry_the_last_subject(self):
+        from core.answers.pipeline import QueryPipeline
+        from types import SimpleNamespace
+        tab = SimpleNamespace(history=[{"role": "user", "content": "have you seen Inception"},
+                                       {"role": "assistant", "content": "Yes."}])
+        with mock.patch("core.library.wiki_lookup.find_articles",
+                        side_effect=lambda t, max_articles=2: [("x", None)] if "Inception" in t else []):
+            self.assertEqual(QueryPipeline._subject_text(tab, "who are you"), "who are you")
 
     def test_off_switch_is_the_old_way(self):
         self.llm.config.two_models = False

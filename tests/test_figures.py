@@ -52,6 +52,18 @@ class TestFigures(unittest.TestCase):
     def test_scan_finds_the_picture_pages(self):
         self.assertEqual(figures.scan_pdf(self.kb / "build" / "joinery.pdf"), {2, 6})
 
+    def test_cover_is_not_a_figure(self):
+        import fitz
+        path = self.kb / "build" / "manual.pdf"
+        doc = fitz.open()
+        doc.new_page().insert_textbox(fitz.Rect(50, 50, 550, 800),
+                                      " ".join(TEXT.split()[:30]), fontsize=9)   # sparse cover
+        for _ in range(4):
+            doc.new_page().insert_textbox(fitz.Rect(50, 50, 550, 800), TEXT, fontsize=9)
+        doc.save(str(path))
+        doc.close()
+        self.assertEqual(figures.scan_pdf(path), set())
+
     def test_build_and_lookup(self):
         self.assertIsNone(figures.figure_pages("build", "joinery"))   # not scanned: old behaviour
         self.assertEqual(figures.build(self.kb, progress=lambda *_: None), 1)

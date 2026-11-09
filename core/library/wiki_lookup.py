@@ -282,6 +282,7 @@ def search(query: str, limit: int = 30, knowledge=None) -> List[Dict]:
         return []
     key = "_".join(words)
     want = set(w for w in words if w not in _STOP) or set(words)
+    want_one = {w.rstrip("s") for w in want}          # "plants" also finds "Plant"
 
     # Step 1 (the full database: exact and starts-with titles by query, not a scan)
     scored = []
@@ -292,11 +293,13 @@ def search(query: str, limit: int = 30, knowledge=None) -> List[Dict]:
     for stem, path in ([] if isinstance(titles, _DbTitles) else titles.items()):
         if stem == key:
             s = 100
+        elif len(key) > 3 and stem == key.rstrip("s"):
+            s = 95              # "plants" → Plant
         elif stem.startswith(key):
             s = 80 - min(20, len(stem) - len(key)) / 2
         else:
             parts = set(stem.split("_"))
-            hit = len(want & parts)
+            hit = len(want & parts) or len(want_one & {p.rstrip("s") for p in parts})
             if not hit:
                 continue
             s = 60 - len(parts) / 2 if hit == len(want) else 40 * hit / len(want) - len(parts) / 4

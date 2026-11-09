@@ -783,13 +783,14 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "_wiki_widget"):
             self._wiki_widget = WikiSearchWidget(self.knowledge)
             self._wiki_widget.ask_about.connect(self._ask_about_article)
+            self._wiki_widget.ask_in.connect(self._ask_about_passage)
             self.splitter.insertWidget(1, self._wiki_widget)
         self._chat_pane.hide()
         self.input_bar.hide()
         self.chats_panel.hide()            # Wikipedia isn't a chat
         self._wiki_widget.show()
         self._wiki_widget.focus_search()
-        self.setWindowTitle(f"{self.config.assistant_name or 'Prometheus'} — 📖 Wikipedia")
+        self.setWindowTitle(f"{self.config.assistant_name or 'Prometheus'} — Search")
 
     def _show_review_panel(self):
         from ui.panels.review_panel import ReviewPanel
@@ -823,11 +824,26 @@ class MainWindow(QMainWindow):
             self._wiki_widget.hide()
 
     def _ask_about_article(self, title: str):
-        """'Ask about this' in the Wikipedia tab → the chat tab, asking about it."""
+        """'Ask about this' in the Search tab → the chat tab, asking about it."""
         if not title or self._generating:
             return
         self._load_tab("prometheus")
         self._on_send(f"Tell me about {title}")
+
+    def _ask_about_passage(self, domain: str, subject: str):
+        """'Ask about this' on a book result → the section that reads that folder."""
+        if not subject or self._generating:
+            return
+        # Step 1: a section that reads that folder; Step 2: one that reads a folder
+        # of the same family ("plants" → "plants_temperate"); else the chat
+        def reads(t, exact):
+            ds = [] if t.id == "wikipedia" else (getattr(t, "domains", None) or [])
+            return domain in ds if exact else any(d.startswith(domain) or domain.startswith(d.split("_")[0])
+                                                  for d in ds)
+        tab = next((t for t in self.tab_manager.tabs if reads(t, True)), None) or \
+            next((t for t in self.tab_manager.tabs if reads(t, False)), None)
+        self._load_tab(tab.id if tab else "prometheus")
+        self._on_send(subject if len(subject.split()) > 3 else f"Tell me about {subject}")
 
     def _show_messages_panel(self):
         """Show P2P messages panel instead of chat view."""

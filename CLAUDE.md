@@ -159,6 +159,26 @@ Decision layers live in `core/answers/pipeline.py` (`QueryPipeline`, no Qt). The
 - Trace: `brief_text`, `librarian_text` (`pipeline._facts_note`), `response_text` (600 chars),
   `images` → printed by `tracer.print_recent` (debug_run log).
 
+## Log 2026-11-09 15:24 fixes + Search tab
+- Speaker copied BRIEF_SYSTEM back ("SEARCH: 3-8 keywords…") → `_copied` → use the message; search ≤8 words.
+- Librarian said NOT FOUND to nearly everything (even the soap guide's lye steps, the MTG article).
+  `librarian.relevant(message, passage)` (≥half the subject words, `_GENERIC` ignored, 5-letter
+  stems + difflib for typos); NOT FOUND + relevant passages → `loose_block` (speaker reads them),
+  none → `facts_block` "nothing" note (reworded: the old one was quoted back verbatim).
+  EXTRACT_SYSTEM now asks for partial answers. Companion path does the same.
+- `PreparedAnswer.images/sources` = cited passages (`Facts.cited()`) or the relevant ones — never
+  every searched passage (a first-aid manual cover came up for "halo"). `figures.scan_pdf` skips pages
+  1–2 unless captioned. Trace: `librarian_stats` (from `llm.last_complete_stats`), NOT FOUND shows raw.
+- `_subject_text`: "who are you / your name / yourself" start fresh (it carried an old subject).
+  Companion prompt says who it is when asked.
+- Search tab (id still "wikipedia", name "Search", 🔍): `core/library/search_all.search_everything` →
+  {book: `KnowledgeBase.search_library` (Chroma `$nin` wikipedia, else keyword) filtered by `relevant`,
+  one per page, `source`/`image` (any page image)/`path` (`book_file`); note: obsidian; wikipedia:
+  `wiki_lookup.search` (plural → singular titles)}. Panel groups with headers; book reader shows passage
+  + page + "Open the book" (desktop); "Ask about this" → `ask_in(domain, subject)` →
+  `MainWindow._ask_about_passage` picks the tab reading that folder (or prefix family).
+- `_keyword_search` matches words without punctuation + 5-letter stems.
+
 ## Model-noticed facts (2026-11-09) — core/you/notice.py
 - After `_on_response_done` → `_notice_facts(text)` on a thread (not low power, two_models,
   `config.notice_facts`): `worth_asking` (first-person, ≥4 words, not just a question) → librarian with
@@ -209,7 +229,7 @@ Decision layers live in `core/answers/pipeline.py` (`QueryPipeline`, no Qt). The
 - NEVER load Wikipedia into memory at startup: `rag.SKIP_IN_MEMORY` skips the folder in the raw-file
   scan and filters it from chunks_fallback.json; ingest never writes it there. (Owner had no JSON →
   raw scan read every extracted article on the UI thread → window never appeared.) InitWorker pre-lists titles.
-- Wikipedia tab = tab 2 (`id="wikipedia"`, not a chat): `ui/panels/wiki_search.py`, search on a QThread,
+- Search tab (was Wikipedia) = tab 2 (`id="wikipedia"`, not a chat): `ui/panels/wiki_search.py`, search on a QThread,
   title ranking + vector matches when indexed; "Ask about this" → chat tab "Tell me about <title>".
 
 ## Full English Wikipedia (2026-11-09) — core/library/wiki_full.py

@@ -66,6 +66,7 @@ class LLMEngine:
         self.config = config
         self.base_url = config.ollama_url
         self.last_stats: Dict = {}     # Ollama's timing for the last streamed reply
+        self.last_complete_stats: Dict = {}   # …and for the last complete() call
 
     def is_available(self) -> bool:
         """
@@ -293,7 +294,17 @@ class LLMEngine:
         }
         r = requests.post(f"{self.base_url}/api/chat", json=payload, timeout=timeout)
         r.raise_for_status()
-        return strip_thinking(r.json().get("message", {}).get("content", ""))
+        data = r.json()
+        # Where the time went, for the log (the librarian's calls are timed this way)
+        ns = lambda k: int(data.get(k, 0) or 0) // 1_000_000
+        self.last_complete_stats = {
+            "load_ms": ns("load_duration"),
+            "prompt_tokens": int(data.get("prompt_eval_count", 0) or 0),
+            "prompt_eval_ms": ns("prompt_eval_duration"),
+            "gen_tokens": int(data.get("eval_count", 0) or 0),
+            "gen_ms": ns("eval_duration"),
+        }
+        return strip_thinking(data.get("message", {}).get("content", ""))
 
     def summarize(self, conversation_text: str) -> str:
         """

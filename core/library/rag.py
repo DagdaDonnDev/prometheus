@@ -480,6 +480,26 @@ class KnowledgeBase:
         )
         return img_path if img_path.exists() else None
 
+    def search_library(self, query: str, n: int = 30) -> List[Dict]:
+        """
+        Passages from every book folder (not Wikipedia — it has its own
+        search) for the Search tab: by meaning when ChromaDB is set up,
+        by words otherwise.
+        """
+        if self.ready and self.collection and self.collection.count() > 0:
+            try:
+                emb = self.embedder.encode([query]).tolist()
+                res = self.collection.query(
+                    query_embeddings=emb, n_results=min(n, self.collection.count()),
+                    where={"domain": {"$nin": sorted(SKIP_IN_MEMORY)}},
+                    include=["documents", "metadatas"])
+                return [{"content": doc, "source": meta.get("source", "unknown"),
+                         "domain": meta.get("domain", "general"), "page_num": meta.get("page_num", 0)}
+                        for doc, meta in zip(res["documents"][0], res["metadatas"][0])]
+            except Exception:
+                pass
+        return self._keyword_search(query, None, n)
+
     def _keyword_search(
         self,
         query: str,
@@ -497,9 +517,17 @@ class KnowledgeBase:
                 if c.get("domain") in domains
             ]
 
+        # Words without their punctuation, and their first five letters
+        # ("plants" finds "plant," — split() on spaces missed both)
+        query_words |= set(re.findall(r"[a-z0-9']+", query.lower()))
+        query_stems = {w[:5] for w in query_words if len(w) >= 5}
         for chunk in search_chunks:
-            content_words = set(chunk["content"].lower().split())
+            raw_words = chunk["content"].lower().split()
+            content_words = set(raw_words) | set(re.findall(r"[a-z0-9']+", chunk["content"].lower()))
             score = len(query_words & content_words)
+            if query_stems:
+                score += 0.5 * len(query_stems & {w[:5] for w in content_words if len(w) >= 5} - {
+                    w[:5] for w in query_words & content_words if len(w) >= 5})
             if query.lower() in chunk["content"].lower():
                 score += 10
             if score > 0:

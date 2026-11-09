@@ -361,10 +361,19 @@ show, band, book, person, place — its opening paragraph is given to the model
 count: "I watched a movie yesterday" pulls in nothing. Never used in the
 Medical tab or for step-by-step/diagnosis questions.
 
-**The Wikipedia tab** (second tab): finds anything in Wikipedia — a title, a
-name, a phrase, a few words that appear anywhere in an article. Exact titles
-come first, then the best matches, each with the matching text as its preview.
-Read whole articles, and **Ask about this** to talk about one in the chat tab.
+**The Search tab** (second tab): one search over **your books, your notes
+and Wikipedia**. Results come in groups — *In your books*, *Your notes*,
+*Wikipedia* — and each says where it's from ("Edible Wild Plants · p. 12 ·
+plants"). Click one to read it:
+- a **book** result shows the passage, the page itself as a picture, and
+  **Open the book** (opens the PDF in your usual viewer; desktop only)
+- a **Wikipedia** result shows the whole article
+- **Ask about this** asks the section that reads that book (a plants book →
+  Survival), or the chat tab for Wikipedia
+
+Wikipedia finds a title, a name, or words anywhere in an article; exact titles
+come first ("plants" finds *Plant*). Book passages that aren't on the subject
+are left out. Without Wikipedia set up, books and notes are still searched.
 
 - Only real articles are kept — no talk/user/project pages, redirects or stubs
   under 100 words.
@@ -711,8 +720,15 @@ A question that needs the library goes:
 2. the library is searched with those words
 3. the librarian lists the facts the passages support, with numbers, doses
    and steps copied exactly, or NOT FOUND
-4. the speaker answers in its own voice using only those facts — if nothing
-   was found, it says it doesn't have it
+4. the speaker answers in its own voice using only those facts
+5. if the librarian says NOT FOUND but a passage is plainly on the subject
+   (most of your words appear in it), the speaker reads that passage itself —
+   a 1.2B librarian misses things (it said NOT FOUND to the soap guide's lye
+   steps). Only when nothing is on the subject does it say it doesn't have it
+
+Pictures and **From:** lines under an answer come only from the passages it
+actually used (the ones the librarian cited, or the on-subject ones) — not
+from whatever else the search turned up.
 
 Small talk skips all of this, so it's as quick as before. Emergencies skip
 step 1 and the speaker reads the field-manual passages word for word. A
@@ -887,7 +903,8 @@ prometheus/
 │
 ├── core/
 │   ├── pipeline.py            # Decision layers in one place (no UI code)
-│   ├── wiki_lookup.py         # Wikipedia by title (chat background, Wikipedia tab)
+│   ├── wiki_lookup.py         # Wikipedia by title (chat background, Search tab)
+│   ├── search_all.py          # Search tab: books + notes + Wikipedia, each with its source
 │   ├── wiki_index.py          # Full-text search over every article (SQLite FTS5)
 │   ├── tone.py                # Reads the tone of each chat message
 │   ├── embedder.py            # One shared text-embedding model, offline once cached
@@ -927,7 +944,7 @@ prometheus/
 │   ├── workers.py             # LLMWorker, TrainingWorker, InitWorker
 │   ├── chat_view.py           # Messages, timing stamp, "Researching…" line, sources + page images
 │   ├── welcome.py             # Empty-tab welcome panel
-│   ├── wiki_search.py         # Wikipedia tab: search, read, ask about it
+│   ├── wiki_search.py         # Search tab: books, notes, Wikipedia — read, ask about it
 │   ├── dev_panel.py           # Ctrl+D observability
 │   ├── assessment.py          # Situation assessment mode
 │   ├── doc_context.py         # Personal document manager
@@ -970,7 +987,8 @@ Double-click `debug_run.bat`. It runs Prometheus normally. When you close it,
 installed and loaded models, your settings, everything the app printed
 (errors included) and the last 10 replies with where each wait came from —
 and what each model said: the speaker's request to the librarian, the facts the
-librarian found (or NOT FOUND), the reply you got, and any pictures shown. The
+librarian found (or NOT FOUND, with what it actually wrote), how long the
+librarian took to load, read and write, the reply you got, and any pictures shown. The
 folder opens with the file selected, ready to send. `logs/` isn't committed.
 
 ## Testing

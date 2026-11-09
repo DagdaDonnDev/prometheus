@@ -91,6 +91,7 @@ class QueryTrace:
     # What each model said (shortened), so a saved log shows the whole exchange
     brief_text:     str = ""        # speaker → librarian: "SEARCH … | QUESTION …"
     librarian_text: str = ""        # librarian's facts, or NOT FOUND
+    librarian_stats: str = ""       # its load / read / write times
     response_text:  str = ""        # the reply the person got
     images:         List[str] = field(default_factory=list)   # pictures shown with it
 
@@ -319,6 +320,8 @@ def print_recent(n: int = 10):
             print(f"            speaker asked the librarian: {t.brief_text}")
         if t.librarian_text:
             print(f"            librarian found: {t.librarian_text}")
+        if t.librarian_stats:
+            print(f"            librarian time: {t.librarian_stats}")
         if t.response_text:
             print(f"            reply: {t.response_text}")
         if t.images:

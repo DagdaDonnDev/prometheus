@@ -12,6 +12,7 @@ A page counts as a figure page if:
           drawing) — but isn't nearly blank (title and end pages)
   Step 3: (born-digital PDFs) a picture is placed on it that isn't a
           full-page scan, or it's covered in line drawing
+  Step 4: never the first two pages (cover, title page) unless captioned
 
 Scanned books (archive.org) are one full-page image per page, so Step 3
 can't tell there — Steps 1 and 2 do the work.
@@ -66,6 +67,8 @@ def scan_pdf(path: Path) -> Set[int]:
     typical = median([w for w, *_ in pages if w > 30] or [0])
     out = set()
     for n, (words, caption, placed, drawn) in enumerate(pages, 1):
+        if n <= 2 and not caption:
+            continue        # Step 4: the cover and title page aren't figures (one came up for "halo")
         sparse = typical and 25 <= words < typical * 0.45
         if caption or sparse or placed or drawn > 40:   # Steps 1, 2, 3
             out.add(n)

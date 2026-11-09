@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from core.answers.intent_router import IntentRouter, RoutingPlan
-from core.ai.librarian import facts_block
+from core.ai.librarian import facts_block, loose_block, relevant
 from core.answers.tracer import short
 from core.answers.sufficiency_gate import SourceSufficiencyGate
 from core.answers.contradiction import ContradictionDetector
@@ -101,7 +101,21 @@ def _facts_note(facts) -> str:
     """The librarian's answer for the log."""
     if facts.failed:
         return "(couldn't be asked)"
-    return short(facts.text, 500) if facts.found and facts.text else "NOT FOUND"
+    if facts.found and facts.text:
+        return short(facts.text, 500)
+    said = short(getattr(facts, "raw", ""), 160)
+    return "NOT FOUND" + (f" (it wrote: {said})" if said and said.upper() != "NOT FOUND" else "")
+
+
+def _trace_librarian(trace, facts):
+    """Time, words and Ollama's timing for the librarian's call."""
+    trace.librarian_ms = facts.ms
+    trace.librarian_text = _facts_note(facts)
+    st = getattr(facts, "stats", None) or {}
+    if st:
+        trace.librarian_stats = (f"load {st.get('load_ms', 0)} ms · read {st.get('prompt_tokens', 0)} "
+                                 f"tokens {st.get('prompt_eval_ms', 0)} ms · wrote "
+                                 f"{st.get('gen_tokens', 0)} tokens {st.get('gen_ms', 0)} ms")
 
 
 @dataclass
@@ -313,19 +327,36 @@ class QueryPipeline:
         # Step 7c: the librarian reads the passages and keeps only the facts
         # that answer the question; the speaker gets those instead of the
         # passages, and may state nothing else about it
+        used = list(getattr(self.knowledge, "_last_used_chunks", None)
+                    or raw_chunks[:max(1, getattr(self.knowledge, "prompt_passages", 3))])
+        # Which passages the answer stands on → its pictures and "From:" lines
+        # (a picture from a passage that wasn't used was what came up for "halo")
+        shown = [i for i, r in enumerate(used) if relevant(f"{user_input} {question}", r.get("content", ""))]
+        wiki_shown = list(wiki_sources)
         if use_librarian and (raw_chunks or wiki_sources):
             passages = [(self.knowledge.scorer._source_label(r.get("source", ""), r.get("domain", "")),
-                         r.get("content", ""))
-                        for r in (getattr(self.knowledge, "_last_used_chunks", None)
-                                  or raw_chunks[:max(1, getattr(self.knowledge, "prompt_passages", 3))])]
+                         r.get("content", "")) for r in used]
             if not routing_plan.is_strict and tab.id != "medical":
                 passages += self._wiki_passages(search_q, 200)
             facts = self.librarian.extract(question, passages)
             if trace:
-                trace.librarian_ms = facts.ms
-                trace.librarian_text = _facts_note(facts)
-            if not facts.failed:
+                _trace_librarian(trace, facts)
+            if facts.found:
                 knowledge_context = facts_block(facts)
+                cited = facts.cited()
+                shown = [i for i in range(len(used)) if i + 1 in cited] or shown
+                wiki_shown = [label for i, (label, _) in enumerate(passages)
+                              if i >= len(used) and i + 1 in cited] or wiki_shown
+            elif not facts.failed:
+                # Step 7d: "NOT FOUND" from a 1.2B model is often wrong (the soap
+                # guide has the lye steps). Passages that are plainly on the subject
+                # go to the speaker as they are; only none at all = "nothing"
+                keep = [i for i, (label, text) in enumerate(passages)
+                        if relevant(f"{user_input} {question}", f"{label} {text}")]
+                knowledge_context = (loose_block([passages[i] for i in keep], user_input)
+                                     if keep else facts_block(facts))
+                shown = [i for i in keep if i < len(used)]
+                wiki_shown = [passages[i][0] for i in keep if i >= len(used)]
 
         # Step 8: the section's role is the fixed instructions; everything
         # decided for THIS question (rules, facts, guidance — guidance last)
@@ -358,8 +389,8 @@ class QueryPipeline:
                 + questions
             )
 
-        images = list(getattr(self.knowledge, "get_last_images", lambda: [])() or [])
-        sources = list(getattr(self.knowledge, "get_last_sources", lambda: [])() or []) + wiki_sources
+        images = list(dict.fromkeys(used[i]["image_path"] for i in shown if used[i].get("image_path")))
+        sources = list(dict.fromkeys([self._source_line(used[i]) for i in shown] + wiki_shown))
 
         return PreparedAnswer(
             system_prompt=system_prompt,
@@ -372,6 +403,11 @@ class QueryPipeline:
             images=images,
             sources=sources,
         )
+
+    def _source_line(self, chunk: Dict) -> str:
+        """"Book title, p. 12" for one passage (as under every answer)."""
+        label = self.knowledge.scorer._source_label(chunk.get("source", ""), chunk.get("domain", ""))
+        return label + (f", p. {chunk['page_num']}" if chunk.get("page_num") else "")
 
     def assistant_name(self) -> str:
         return (getattr(self.config, "assistant_name", "") or "Prometheus").strip()
@@ -490,15 +526,19 @@ class QueryPipeline:
             question = (f"{user_input} (about: {subject})" if carried else user_input)
             facts = self.librarian.extract(question, passages)
             if trace:
-                trace.librarian_ms = facts.ms
-                trace.librarian_text = _facts_note(facts)
+                _trace_librarian(trace, facts)
+            keep = [p for p in passages if relevant(question, f"{p[0]} {p[1]}")]
+            lead_in = "If they're still on the same subject — " if carried else ""
             if facts.failed:            # librarian unreachable: the speaker reads them itself
                 parts.append("Background from the library — use only this for facts about it:\n" +
                              "\n\n".join(f"{label}: {' '.join(text.split()[:110])}"
                                            for label, text in passages))
+            elif not facts.found and keep:
+                # Step 4c: the librarian said NOT FOUND, but the article is on the
+                # subject (it did that with the Magic: The Gathering article)
+                parts.append(lead_in + loose_block(keep, user_input, 90))
             else:
-                parts.append(("If they're still on the same subject — " if carried else "") +
-                             facts_block(facts, "it"))
+                parts.append(lead_in + facts_block(facts, "it"))
 
         # Step 5: how to sound right now — read from their message in code,
         # last in the prompt (a small model can't pick tone up on its own)
@@ -542,7 +582,9 @@ class QueryPipeline:
         q = user_input.lower()
         if re.match(r"(anyway|anyways|by the way|btw|different question|new question|"
                     r"forget that|never ?mind|how are you|how was your|how's your|good morning|"
-                    r"good night|hey|hi|hello)\b", q):
+                    r"good night|hey|hi|hello)\b", q) or \
+                re.search(r"\b(who|what) are you\b|\byour (name|quest|purpose|job)\b|\byourself\b", q):
+            # …and so do questions about the assistant ("who are you")
             return user_input
         continuing = (len(q.split()) <= 8 or is_follow_up(user_input) or re.search(
             r"\b(more|it|its|it's|they|them|their|he|his|she|her|that|this|those|lore|story|"
