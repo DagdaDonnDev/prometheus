@@ -78,9 +78,9 @@ class TestPipelineWithTwoModels(unittest.TestCase):
         models = [m for m, _, _ in self.llm.calls]
         self.assertEqual(models, [self.llm.config.speaker_model, self.llm.config.librarian_model])
         self.assertIn("How long should water be boiled?", self.llm.calls[1][2])   # the brief's question
-        self.assertIn("LIBRARY FACTS", out.system_prompt)
-        self.assertIn("Boil water for 1 minute", out.system_prompt)
-        self.assertNotIn("Retrieved knowledge — use as primary source:\n[", out.system_prompt)
+        self.assertIn("LIBRARY FACTS", out.full_prompt)
+        self.assertIn("Boil water for 1 minute", out.full_prompt)
+        self.assertNotIn("Retrieved knowledge — use as primary source:\n[", out.full_prompt)
 
     def test_emergency_skips_the_librarian(self):
         self.prepare("he's not breathing what do i do", "medical")
@@ -90,7 +90,7 @@ class TestPipelineWithTwoModels(unittest.TestCase):
         with mock.patch("core.library.wiki_lookup.find_articles", return_value=[]):
             out = self.prepare("hey how's it going", "prometheus")
         self.assertEqual(self.llm.calls, [])
-        self.assertNotIn("LIBRARY FACTS", out.system_prompt)
+        self.assertNotIn("LIBRARY FACTS", out.full_prompt)
 
     def test_chat_lookup_goes_through_the_librarian(self):
         from pathlib import Path
@@ -102,9 +102,9 @@ class TestPipelineWithTwoModels(unittest.TestCase):
         with mock.patch("core.library.wiki_lookup.find_articles", return_value=[("Inception (film)", art)]):
             out = self.prepare("have you seen inception", "prometheus")
         self.assertEqual([m for m, _, _ in self.llm.calls], [self.llm.config.librarian_model])
-        self.assertIn("LIBRARY FACTS", out.system_prompt)
-        self.assertNotIn("Christopher Nolan. Inception", out.system_prompt)     # no raw article text
-        self.assertTrue(out.system_prompt.rstrip().split("\n")[-1].startswith("Right now:"))
+        self.assertIn("LIBRARY FACTS", out.full_prompt)
+        self.assertNotIn("Christopher Nolan. Inception", out.full_prompt)     # no raw article text
+        self.assertTrue(out.full_prompt.rstrip().split("\n")[-1].startswith("Right now:"))
 
     def test_off_switch_is_the_old_way(self):
         self.llm.config.two_models = False

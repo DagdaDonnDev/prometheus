@@ -30,7 +30,7 @@ class TestPipeline(unittest.TestCase):
         plan, out = self.prepare("someone is bleeding right now and i can't stop it", "medical")
         self.assertEqual(out.mode.value, "emergency")
         self.assertFalse(out.clarify_text)
-        self.assertIn("EMERGENCY", out.system_prompt)
+        self.assertIn("EMERGENCY", out.full_prompt)
 
     def test_companion_reflection_is_warm(self):
         plan, out = self.prepare("i feel completely alone", "prometheus")
@@ -48,14 +48,14 @@ class TestPipeline(unittest.TestCase):
 
     def test_prompt_order_guidance_last(self):
         plan, out = self.prepare("how do i purify water", "survival")
-        self.assertTrue(out.system_prompt)
+        self.assertTrue(out.full_prompt)
         self.assertIsNotNone(out.mode)
 
     def test_companion_prompt_is_small(self):
         # The old companion prompt was ~2,600 tokens — the main cause of a 3 s wait
         plan, out = self.prepare("hey, how's it going?", "prometheus")
-        self.assertLess(len(out.system_prompt), 1400)
-        self.assertNotIn("I hear you\" must", out.system_prompt)
+        self.assertLess(len(out.full_prompt), 1400)
+        self.assertNotIn("I hear you\" must", out.full_prompt)
         self.assertEqual(out.images, [])
         self.assertEqual(out.sources, [])
 
@@ -75,7 +75,7 @@ class TestPipeline(unittest.TestCase):
                 tab.new_chat()
             plan = self.pipe.route("hey, how's it going?", "prometheus")
             out = self.pipe.prepare_knowledge(tab, "hey, how's it going?", plan)
-            p = out.system_prompt
+            p = out.full_prompt
             for bit in ("Cork", "Kate (sister)", "hiking", "sourdough"):
                 self.assertIn(bit, p)
             self.assertTrue(p.rstrip().split("\n")[-1].startswith("Right now:"))
@@ -94,7 +94,7 @@ class TestPipeline(unittest.TestCase):
                       "their missions", "anyway how was your day"]:
                 tab.add_message("user", q)
                 out = self.pipe.prepare_knowledge(tab, q, self.pipe.route(q, "prometheus"))
-                seen[q] = out.system_prompt
+                seen[q] = out.full_prompt
         self.assertIn('nothing about "titanfall 2"', seen["tell me what you know of titanfall 2"])
         self.assertIn('nothing about "titanfall 2"', seen["go into the lore"])
         self.assertIn("still on the same subject", seen["their missions"])
@@ -102,7 +102,7 @@ class TestPipeline(unittest.TestCase):
 
     def test_knowledge_prompt_trimmed(self):
         plan, out = self.prepare("how do i purify water", "survival")
-        self.assertLess(len(out.system_prompt), 8000)
+        self.assertLess(len(out.full_prompt), 8000)
 
     def test_everyday_help_is_not_emergency(self):
         for q in ("can you help me plan my week", "help me think something through"):
@@ -114,17 +114,17 @@ class TestPipeline(unittest.TestCase):
             plan, out = self.prepare("i want to kill myself", tab)
             self.assertTrue(plan.is_crisis, tab)
             self.assertEqual(out.mode.value, "emergency")
-            self.assertIn("safe right now", out.system_prompt)
+            self.assertIn("safe right now", out.full_prompt)
 
     def test_assistant_name(self):
         self.pipe.config.assistant_name = "Ember"
         self.pipe.config.assistant_persona = "dry humour"
         try:
             plan, out = self.prepare("hey", "prometheus")
-            self.assertTrue(out.system_prompt.startswith("You are Ember."))
-            self.assertIn("dry humour", out.system_prompt)
+            self.assertTrue(out.full_prompt.startswith("You are Ember."))
+            self.assertIn("dry humour", out.full_prompt)
             plan, out = self.prepare("how do i purify water", "survival")
-            self.assertIn("You are Ember", out.system_prompt)
+            self.assertIn("You are Ember", out.full_prompt)
         finally:
             self.pipe.config.assistant_name = "Prometheus"
             self.pipe.config.assistant_persona = ""
@@ -135,9 +135,9 @@ class TestPipeline(unittest.TestCase):
         from unittest import mock
         with mock.patch("core.library.wiki_lookup.find_articles", return_value=[]):
             plan, out = self.prepare("have you seen the juror?", "prometheus")
-        self.assertIn('NOT IN YOUR LIBRARY: you have nothing about "the juror"', out.system_prompt)
+        self.assertIn('NOT IN YOUR LIBRARY: you have nothing about "the juror"', out.full_prompt)
         plan, out = self.prepare("tell me about your day", "prometheus")
-        self.assertNotIn("NOT IN YOUR LIBRARY", out.system_prompt)
+        self.assertNotIn("NOT IN YOUR LIBRARY", out.full_prompt)
 
     def test_default_model(self):
         from core.app.config import Config

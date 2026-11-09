@@ -106,7 +106,8 @@ class Librarian:
         started = time.time()
         if not passages:
             return Facts("", False, 0)
-        numbered = _numbered(passages)
+        low = getattr(self.config, "low_power_active", False)
+        numbered = _numbered(passages, 220 if low else MAX_PASSAGE_WORDS)
         try:
             raw = self.llm.complete(EXTRACT_SYSTEM, f"QUESTION: {question}\n\nPASSAGES:\n{numbered}",
                                     model=self.config.librarian_model,
@@ -119,7 +120,7 @@ class Librarian:
             # "the library has nothing" — the caller falls back to the passages
             return Facts("", False, ms, failed=True)
         facts = [ln.strip() for ln in raw.splitlines() if ln.strip().startswith(("-", "•", "*"))]
-        facts = ["- " + ln.lstrip("-•* ").strip() for ln in facts][:8]
+        facts = ["- " + ln.lstrip("-•* ").strip() for ln in facts][:5 if low else 8]
         if not facts or re.search(r"\bNOT FOUND\b", raw) and len(facts) <= 1:
             return Facts("", False, ms)
         return Facts("\n".join(facts), True, ms)
@@ -135,9 +136,9 @@ def _cut(text: str, words: int) -> str:
     return " ".join(w[:words]) + (" …" if len(w) > words else "")
 
 
-def _numbered(passages: List[Tuple[str, str]]) -> str:
-    """[1] (source) text … — shared fairly within MAX_PASSAGE_WORDS."""
-    each = max(60, MAX_PASSAGE_WORDS // max(1, len(passages)))
+def _numbered(passages: List[Tuple[str, str]], budget: int = MAX_PASSAGE_WORDS) -> str:
+    """[1] (source) text … — shared fairly within `budget` words."""
+    each = max(50, budget // max(1, len(passages)))
     return "\n\n".join(f"[{i}] ({label}) {_cut(text, each)}"
                        for i, (label, text) in enumerate(passages, 1))
 

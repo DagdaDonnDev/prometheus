@@ -96,6 +96,10 @@ class SettingsDialog(QDialog):
         learned.setObjectName("noteLabel")
         form.addRow(learned)
 
+        self._notice = QCheckBox("Let the model notice things about you too (you confirm each in Review)")
+        self._notice.setChecked(self.config.notice_facts)
+        form.addRow(self._notice)
+
         self._day_spin = QSpinBox()
         self._day_spin.setMinimum(1)
         self._day_spin.setMaximum(9999)
@@ -296,6 +300,23 @@ class SettingsDialog(QDialog):
         self._companion_model.setEnabled(self.config.two_models)
         form.addRow(self._two_models)
 
+        # Performance: Automatic picks full or low power from the hardware
+        self._power = QComboBox()
+        for label, value in (("Automatic (recommended)", "auto"), ("Full", "full"),
+                             ("Low power — leaner, quicker answers on slow computers", "low")):
+            self._power.addItem(f"{label}   ▾", value)
+        self._power.setCurrentIndex(max(0, self._power.findData(self.config.power_mode)))
+        form.addRow("Performance:", self._power)
+        found = getattr(self.config, "hardware_summary", "")
+        why = getattr(self.config, "power_reason", "")
+        now = "low power" if getattr(self.config, "low_power_active", False) else "full"
+        detected = QLabel((f"This computer: {found}.\n" if found else
+                           "This computer: checked once the models have loaded.\n") +
+                          f"Now using: {now}" + (f" — {why}." if why else "."))
+        detected.setObjectName("noteLabel")
+        detected.setWordWrap(True)
+        form.addRow(detected)
+
         row = QHBoxLayout()
         refresh = QPushButton("Check Ollama")
         refresh.clicked.connect(self._refresh_models)
@@ -356,7 +377,8 @@ class SettingsDialog(QDialog):
 
         # Step 2
         probe = self._llm_probe
-        probe.config = _C(**{**self.config.__dict__,
+        saved = {k: v for k, v in self.config.__dict__.items() if k in _C.__dataclass_fields__}
+        probe.config = _C(**{**saved,
                              "ollama_url": self._ollama_url.text().strip() or self.config.ollama_url})
 
         class _Probe(QThread):
@@ -492,6 +514,7 @@ class SettingsDialog(QDialog):
         u["likes"]            = items(self._likes_edit.text())
         u["dislikes"]         = items(self._dislikes_edit.text())
         u["notes"]            = items(self._notes_edit.text(), ";")
+        self.config.notice_facts = self._notice.isChecked()
 
     def _save_rest(self):
 
@@ -501,6 +524,7 @@ class SettingsDialog(QDialog):
         self.config.librarian_model = (self._companion_model.currentData()
                                        or self.config.librarian_model).strip()
         self.config.two_models      = self._two_models.isChecked()
+        self.config.power_mode      = self._power.currentData() or "auto"
 
         # Assistant
         # Assistant: every voice's profile, then switch to the chosen voice

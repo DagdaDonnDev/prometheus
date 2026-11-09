@@ -318,6 +318,12 @@ class MainWindow(QMainWindow):
         self._voice_mode = False          # back-and-forth voice conversation
         self._heard = _HeardBridge()
         self._heard.heard.connect(self._on_heard)
+        self._summary_bridge = _SummaryBridge()
+        self._summary_bridge.done.connect(self._summary_ready)
+        self._power_bridge = _PowerBridge()
+        self._power_bridge.decided.connect(self._apply_power)
+        self._noticed_bridge = _NoticedBridge()
+        self._noticed_bridge.found.connect(self._on_noticed)
         self._speech_timer = QTimer(self)
         self._speech_timer.setInterval(120)
         self._speech_timer.timeout.connect(self._voice_tick)
@@ -492,13 +498,15 @@ class MainWindow(QMainWindow):
         ready = f"✓ Ready · {self.config.speaker_model}"
         if self.config.two_models:
             ready += f" (librarian: {self.config.librarian_model.split('/')[-1]})"
+        if getattr(self.config, "low_power_active", False):
+            ready += " · low power"
         if voice_name and voice_name != "None":
             ready += f" · Voice: {voice_name}"
         self.status_bar.showMessage(ready, 6000)
 
     def _apply_assistant_name(self):
         """Header title and the companion tab use the chosen name."""
-        self.knowledge.prompt_passages = max(1, int(self.config.rag_results or 3))
+        self._apply_power_limits()
         name = (self.config.assistant_name or "Prometheus").strip()
         self._title_label.setText(name)
         tab = self.tab_manager.get_tab("prometheus")
@@ -529,7 +537,53 @@ class MainWindow(QMainWindow):
             self.llm.warm_up(prompt)
             if self.config.two_models and self.config.librarian_model != self.config.speaker_model:
                 self.llm.warm_up(model=self.config.librarian_model)
+            # Now the models are loaded, see what this computer can do
+            # (Ollama says whether they went onto the graphics card)
+            from core.app import hardware
+            try:
+                hw = hardware.detect()
+                mode, why = hardware.recommend(hw, hardware.ollama_on_gpu(self.llm.base_url))
+                self._power_bridge.decided.emit(mode, why, hw.summary())
+            except Exception:
+                pass
         threading.Thread(target=warm, daemon=True).start()
+
+    def _apply_power(self, auto_choice: str, why: str, summary: str, tell: bool = True):
+        """
+        Full or low-power mode.
+
+        Step 1: Settings → Model → Performance wins if it's Full or Low power;
+                on Automatic, the hardware's choice is used
+        Step 2: apply the limits (fewer, shorter library passages)
+        Step 3: on Automatic, say so in the chat when the choice changes
+                (not every start — only when it differs from last time)
+        """
+        cfg = self.config
+        cfg.hardware_summary, cfg.power_reason = summary, why
+        # Step 1
+        chosen = cfg.power_mode if cfg.power_mode in ("full", "low") else auto_choice
+        cfg.low_power_active = chosen == "low"
+        # Step 2
+        self._apply_power_limits()
+        # Step 3
+        if cfg.power_mode == "auto" and auto_choice != cfg.power_last:
+            first_time = not cfg.power_last
+            cfg.power_last = auto_choice
+            cfg.save()
+            if tell and (auto_choice == "low" or not first_time):
+                note = (f"Low-power mode is on — {why}. Answers are kept leaner so they stay "
+                        "quick. Settings → Model → Performance to change it."
+                        if auto_choice == "low" else
+                        f"Full mode is on — {why}. Settings → Model → Performance to change it.")
+                self.chat_view.add_note(note)
+                self.status_bar.showMessage(note, 12000)
+
+    def _apply_power_limits(self):
+        """Library passages per answer: 2 shorter ones in low power, else as set."""
+        low = getattr(self.config, "low_power_active", False)
+        wanted = max(1, int(self.config.rag_results or 3))
+        self.knowledge.prompt_passages = min(wanted, 2) if low else wanted
+        self.knowledge.passage_words = 90 if low else 130
 
     def _start_background_init(self):
         """Initialize heavy components in background after UI shown."""
@@ -855,6 +909,7 @@ class MainWindow(QMainWindow):
         from core.you.profile import learn
         # (shown once the reply is done, so the "thinking" status doesn't hide it)
         learned = learn(text, self.memory)
+        self._last_user_text = text           # for the model's own look, after the reply
         self._learned_note = ("To confirm in the Review tab: " + "; ".join(learned)) if learned else ""
         if learned:
             self._on_review_changed()
@@ -1029,15 +1084,19 @@ class MainWindow(QMainWindow):
             self._end_generation()
             return
 
-        # Step 11: stream the response (tokens go to the chat and the voice)
-        messages = self.context_mgr.prepare_messages(tab)
+        # Step 11: stream the response (tokens go to the chat and the voice).
+        # The history is sent exactly as last time and this question's
+        # context rides with the newest message, so the model only has to
+        # read what's new (see pipeline.with_turn_context)
+        from core.answers.pipeline import with_turn_context
+        messages = with_turn_context(self.context_mgr.messages_for(tab), prepared.turn_context)
         import time as _time
         trace.prep_ms = int((_time.time() - trace.timestamp) * 1000)
         self.llm.last_stats = {}
         self.chat_view.start_assistant_message()
 
         self._llm_worker = LLMWorker(
-            self.llm, messages, prepared.system_prompt,
+            self.llm, messages, prepared.system_prompt,   # fixed instructions only
             tab_id=tab.id,
             intent=prepared.intent,
         )
@@ -1089,11 +1148,62 @@ class MainWindow(QMainWindow):
         note = getattr(self, "_learned_note", "")
         self._learned_note = ""
         self.status_bar.showMessage(note, 8000 if note else 0)
+        self._notice_facts(getattr(self, "_last_user_text", ""))
+
+    def _notice_facts(self, text: str):
+        """
+        After the reply (never slowing it): the librarian looks for things
+        they said about themselves that the fixed patterns missed, on a
+        background thread. Anything found waits in the Review tab.
+        Off in low-power mode, with one model, or in Settings → You.
+        """
+        import threading
+        cfg = self.config
+        if not text or not cfg.notice_facts or not cfg.two_models or \
+                getattr(cfg, "low_power_active", False):
+            return
+        from core.you import notice
+        if not notice.worth_asking(text):
+            return
+
+        def work():
+            from core.you import claims
+            try:
+                added = claims.stage(notice.notice(self.llm, text), self.memory)
+            except Exception:
+                added = []
+            if added:
+                self._noticed_bridge.found.emit([c.note for c in added])
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_noticed(self, notes):
+        self._on_review_changed()
+        if not self._generating:
+            self.status_bar.showMessage("To confirm in the Review tab: " + "; ".join(notes), 8000)
 
     def _background_summarize(self, tab: Tab):
-        """Summarize old context in background without blocking UI."""
-        self.context_mgr.prepare_messages(tab)
-        self.tab_manager.save()
+        """
+        Summarise the oldest messages of a long chat on a background thread
+        (it's a model call — it used to run here and freeze the window).
+        """
+        import threading
+        if getattr(self, "_summarising", False):
+            return
+        self._summarising = True
+        old, text = self.context_mgr.summarise_job(tab)
+
+        def work():
+            try:
+                summary = self.llm.summarize(text)
+            except Exception:
+                summary = ""
+            self._summary_bridge.done.emit(tab, old, summary)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _summary_ready(self, tab, old, summary):
+        self._summarising = False
+        if self.context_mgr.apply_summary(tab, old, summary):
+            self.tab_manager.save()
 
     def _on_error(self, error: str):
         tracer.discard()
@@ -1420,6 +1530,9 @@ class MainWindow(QMainWindow):
         self.config.save()
         from core.library import obsidian
         obsidian.set_vault(self.config.obsidian_vault, self.config.obsidian_use_notes)
+        # Performance may have changed (Automatic keeps the hardware's last choice)
+        self._apply_power(self.config.power_last or "full", self.config.power_reason,
+                          self.config.hardware_summary, tell=False)
         # Apply changes now — no restart needed
         self._apply_assistant_name()
         self.llm.base_url = self.config.ollama_url.rstrip("/")
@@ -1462,6 +1575,21 @@ class MainWindow(QMainWindow):
         # Silent backup on every close
         self.backup.backup(label=f"day{self.memory.data['user']['day_count']}")
         event.accept()
+
+
+class _NoticedBridge(QObject):
+    """Facts the librarian noticed (staged for Review), back to the window."""
+    found = Signal(list)
+
+
+class _PowerBridge(QObject):
+    """Carries the hardware check's choice (full / low power) to the window."""
+    decided = Signal(str, str, str)        # choice, why, what was detected
+
+
+class _SummaryBridge(QObject):
+    """Carries a finished chat summary from its background thread to the window."""
+    done = Signal(object, object, str)     # tab, the messages summarised, summary
 
 
 class _HeardBridge(QObject):

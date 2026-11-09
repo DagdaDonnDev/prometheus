@@ -108,6 +108,54 @@ Decision layers live in `core/answers/pipeline.py` (`QueryPipeline`, no Qt). The
 - `prepare_knowledge(..., progress)` runs in `ui/workers.PrepareWorker` (QThread); results guarded
   by `_generation_id`; `_answer_prepared` continues on the UI thread. Trace: brief_ms, librarian_ms.
 
+## Answer quality fixes (2026-11-09, owner: "consistent low confidence", Build "redundant things")
+- ingest names chunks' `source` after the FILE stem (owner's PDFs: "practicalcarpen01radfgoog"), so
+  `SOURCE_TIERS.get(source, 55)` scored every book 55 = LOW → CAUTIOUS/SAFE_MODE. `score_chunk(…, domain)`
+  now falls back to the FOLDER grade (survival 85, medical 90, build 82 … in SOURCE_TIERS).
+- `build_bounds`: FAILURE_INSTRUCTIONS + "ask one clarifying question" only for medical/chemistry or
+  when sources are missing/conflicting or mode is SAFE_MODE/CLARIFY.
+- `KnowledgeBase._diverse`: passages sharing >50% word pairs with a better one are left out of the
+  prompt (`_last_used_chunks`, also what the librarian reads). Obsidian `title_hit` floor 80 → 92.
+- Owner (2026-11-09): "response time exceptionally fast", "better to talk with".
+
+## Prompt layout for Ollama's cache (2026-11-09)
+- `PreparedAnswer.system_prompt` = what rarely changes (companion persona + name + about_line +
+  earlier_topics; knowledge tabs: `_tab_system` only). `turn_context` = per-question (facts/rules/
+  guidance/tone) → `pipeline.with_turn_context(messages, ctx)` prefixes it onto the NEWEST user message
+  only ("[For this reply — not part of their message] … [Their message]"); saved history stays raw.
+  `full_prompt` property = both (tests use it). Measured: chat tab ~24% less to read per message;
+  knowledge tabs ~1% (the per-question passages dominate — low-power trims those).
+- `ContextManager.messages_for(tab)` never blocks (newest MAX_MESSAGES if no summary yet);
+  summaries run on a thread (`_background_summarize` → `_SummaryBridge` → `apply_summary`, applied only
+  if the chat still starts with the summarised messages). It used to summarise on the UI thread.
+
+## Low power (2026-11-09) — core/app/hardware.py
+- `detect()` (RAM via OS calls, cores, arch, GPU via nvidia-smi / Win32_VideoController / lspci) +
+  `ollama_on_gpu(base_url)` (/api/ps size_vram, after warm-up) → `recommend()` → full|low + reason.
+  Low if RAM < 7 GB, models on CPU, or (unknown and no GPU and ARM or <6 cores).
+- `config.power_mode` auto|full|low (saved), `power_last` (last auto choice → note only on change);
+  runtime attrs (NOT fields, never saved): `low_power_active`, `power_reason`, `hardware_summary`
+  (`__post_init__`; until checked, auto assumes power_last). Anything copying Config must filter to
+  `__dataclass_fields__` (Settings' Ollama probe did `Config(**__dict__)` and broke).
+- Effects when low: no `Librarian.brief`; librarian passages 220 words, ≤5 facts; 2 passages × 90 words;
+  history 10 messages (`messages_for`); num_predict ≤ 220; (model-noticed facts off).
+- Window: warm-up thread → `_PowerBridge.decided` → `_apply_power` (+ chat note, status) →
+  `_apply_power_limits`. Settings → Model → Performance combo + "This computer: …" line.
+
+## Book titles (2026-11-09) — core/library/titles.py
+- knowledge_base/titles.json {source key (file stem, spaces→_, lower): title}; built by
+  `tools/ingest.py --titles` and after every ingest; never overwrites (owner may edit). PDF metadata
+  title (subtitle after ;/: dropped), md first heading, else cleaned file name unless it looks like a
+  code. `confidence._source_label` checks `titles.title_for(source)` first (cached by mtime).
+
+## Model-noticed facts (2026-11-09) — core/you/notice.py
+- After `_on_response_done` → `_notice_facts(text)` on a thread (not low power, two_models,
+  `config.notice_facts`): `worth_asking` (first-person, ≥4 words, not just a question) → librarian with
+  NOTICE_SYSTEM (fixed "field: value" lines or NONE, 80 tokens) → `parse` keeps only values whose words
+  all appear in the message (person: Name + relation both in it) → `claims.stage` with confidence 0.55,
+  `origin="model"` (claims tables gained an `origin` column via ALTER) → `_NoticedBridge` → Review count.
+  Review card kind line adds "· noticed by the model". Settings → You checkbox.
+
 ## Chat tab, speed, crisis (2026-11-05, owner uses LFM2.5-1.2B-Instruct)
 - Companion = `pipeline._prepare_companion`: COMPANION_PERSONALITY (friend, length follows mood,
   "mhm" ok, no therapy talk) + name + optional 2×90-word background only for COMPANION_TOPICS.

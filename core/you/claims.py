@@ -49,6 +49,7 @@ class Claim:
     confidence: float = 0.7
     id: int = 0
     created: str = ""
+    origin: str = "pattern"   # "pattern" (fixed wording) or "model" (noticed by the librarian)
 
 
 def _db():
@@ -60,6 +61,10 @@ def _db():
         db.execute(f"CREATE TABLE IF NOT EXISTS {table} ("
                    "id INTEGER PRIMARY KEY AUTOINCREMENT, field TEXT, value TEXT, note TEXT, "
                    f"utterance TEXT, confidence REAL, created TEXT{extra})")
+        try:                                   # added later — older files lack it
+            db.execute(f"ALTER TABLE {table} ADD COLUMN origin TEXT DEFAULT 'pattern'")
+        except sqlite3.OperationalError:
+            pass
     return db
 
 
@@ -94,9 +99,9 @@ def stage(claims: List[Claim], memory=None) -> List[Claim]:
             if _known(db, c.field, c.value):
                 continue
             c.created = _now()
-            cur = db.execute("INSERT INTO pending (field, value, note, utterance, confidence, created) "
-                             "VALUES (?,?,?,?,?,?)",
-                             (c.field, c.value, c.note, c.utterance, c.confidence, c.created))
+            cur = db.execute("INSERT INTO pending (field, value, note, utterance, confidence, created, origin) "
+                             "VALUES (?,?,?,?,?,?,?)",
+                             (c.field, c.value, c.note, c.utterance, c.confidence, c.created, c.origin))
             c.id = cur.lastrowid
             added.append(c)
     return added
@@ -109,10 +114,11 @@ def pending() -> List[Claim]:
     if not os.path.exists(DB_PATH):
         return []
     with _db() as db:
-        rows = db.execute("SELECT id, field, value, note, utterance, confidence, created "
+        rows = db.execute("SELECT id, field, value, note, utterance, confidence, created, origin "
                           "FROM pending ORDER BY id").fetchall()
-    return [Claim(field=f, value=v, note=n, utterance=u, confidence=c, id=i, created=t)
-            for i, f, v, n, u, c, t in rows]
+    return [Claim(field=f, value=v, note=n, utterance=u, confidence=c, id=i, created=t,
+                  origin=o or "pattern")
+            for i, f, v, n, u, c, t, o in rows]
 
 
 def pending_count() -> int:
@@ -123,13 +129,14 @@ def pending_count() -> int:
 
 
 def _take(db, claim_id: int) -> Optional[Claim]:
-    row = db.execute("SELECT id, field, value, note, utterance, confidence, created "
+    row = db.execute("SELECT id, field, value, note, utterance, confidence, created, origin "
                      "FROM pending WHERE id=?", (claim_id,)).fetchone()
     if not row:
         return None
     db.execute("DELETE FROM pending WHERE id=?", (claim_id,))
-    i, f, v, n, u, c, t = row
-    return Claim(field=f, value=v, note=n, utterance=u, confidence=c, id=i, created=t)
+    i, f, v, n, u, c, t, o = row
+    return Claim(field=f, value=v, note=n, utterance=u, confidence=c, id=i, created=t,
+                 origin=o or "pattern")
 
 
 # ── Stage 3 ─────────────────────────────────────────────────────────────────
@@ -146,8 +153,8 @@ def accept(claim_id: int, memory, edited_value: str = "") -> Optional[Claim]:
         if edited_value.strip():
             c.value = " ".join(edited_value.split())
         db.execute("INSERT INTO verified (field, value, note, utterance, confidence, created, "
-                   "verified_at, verified_by_user) VALUES (?,?,?,?,?,?,?,1)",
-                   (c.field, c.value, c.note, c.utterance, c.confidence, c.created, _now()))
+                   "verified_at, verified_by_user, origin) VALUES (?,?,?,?,?,?,?,1,?)",
+                   (c.field, c.value, c.note, c.utterance, c.confidence, c.created, _now(), c.origin))
     u = memory.data.setdefault("user", {})
     _, is_list = FIELDS.get(c.field, ("", True))
     if is_list:
@@ -169,8 +176,8 @@ def reject(claim_id: int) -> Optional[Claim]:
         if c is None:
             return None
         db.execute("INSERT INTO rejected (field, value, note, utterance, confidence, created, "
-                   "rejected_at) VALUES (?,?,?,?,?,?,?)",
-                   (c.field, c.value, c.note, c.utterance, c.confidence, c.created, _now()))
+                   "rejected_at, origin) VALUES (?,?,?,?,?,?,?,?)",
+                   (c.field, c.value, c.note, c.utterance, c.confidence, c.created, _now(), c.origin))
     return c
 
 

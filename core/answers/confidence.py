@@ -49,6 +49,22 @@ SOURCE_TIERS = {
     "emergency_medicine": 88,
     "water_purification": 90,
 
+    # Library folders (ingest names each book after its FILE, e.g.
+    # "fm_3-05.70_(fm_21-76)_survival_-_may_2002", which matches nothing
+    # above — so a book is graded by the folder it's in when its own name
+    # isn't listed. Without this every book scored 55 = "LOW".)
+    "survival":           85,
+    "medical":            90,
+    "navigation":         88,
+    "electronics":        85,
+    "farming":            82,
+    "build":              82,
+    "chemistry":          82,
+    "weather_patterns":   80,
+    "soil_maps":          80,
+    "companion":          78,
+    "personal":           75,     # your own documents and Obsidian notes
+
     # Wikipedia — variable quality
     "wikipedia":          68,
 
@@ -96,12 +112,15 @@ MEASUREMENT_PATTERN = re.compile(
 
 class ConfidenceScorer:
 
-    def score_chunk(self, chunk: str, source: str) -> Dict:
+    def score_chunk(self, chunk: str, source: str, domain: str = "") -> Dict:
         """
         Score a knowledge chunk for reliability.
         Returns score (0-100), level, and explanation flags.
+
+        Base: the book's own grade if it's listed, else its folder's,
+        else 55.
         """
-        base = SOURCE_TIERS.get(source, 55)
+        base = SOURCE_TIERS.get(source) or SOURCE_TIERS.get(domain) or SOURCE_TIERS["general"]
         modifier = 0
         flags = []
 
@@ -221,7 +240,12 @@ class ConfidenceScorer:
         return "\n\n---\n\n".join(output)
 
     def _source_label(self, source: str, domain: str) -> str:
-        """Human-readable source label for the model."""
+        """Human-readable source label for the model (and under answers)."""
+        # A book's own title, from knowledge_base/titles.json (core/library/titles)
+        from core.library.titles import title_for
+        known = title_for(source)
+        if known:
+            return known
         labels = {
             "army_fm_3_05_70":    "US Army Survival Manual FM 3-05.70",
             "army_tm_31_210":     "US Army Field Manual TM 31-210",

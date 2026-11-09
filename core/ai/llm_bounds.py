@@ -214,14 +214,25 @@ def build_bounds(
     # ── Knowledge tabs — full bounding ────────────────────────────────────
     parts = []
 
-    role = ROLE_CONSTRAINTS.get(plan.intent, ROLE_CONSTRAINTS[Intent.EXPLAIN])
-    parts.append(role.strip())
+    # Safety-critical sections keep every guard; elsewhere, guards meant for
+    # missing or conflicting sources only go in when that's the case — small
+    # models echo them as extra caveats and questions even when the sources
+    # answer the question (the owner saw this in the Build tab).
+    high_stakes = tab_id in ("medical", "chemistry")
+    weak = (not has_sources) or sources_conflict or \
+        mode in (ResponseMode.SAFE_MODE, ResponseMode.CLARIFY)
+
+    role = ROLE_CONSTRAINTS.get(plan.intent, ROLE_CONSTRAINTS[Intent.EXPLAIN]).strip()
+    if not high_stakes:
+        role = "\n".join(ln for ln in role.splitlines() if "clarifying question" not in ln)
+    parts.append(role)
 
     guard = DRIFT_GUARDS.get(tab_id, "")
     if guard:
         parts.append(guard.strip())
 
-    parts.append(FAILURE_INSTRUCTIONS.strip())
+    if high_stakes or weak:
+        parts.append(FAILURE_INSTRUCTIONS.strip())
 
     if not has_sources:
         parts.append(

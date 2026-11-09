@@ -106,6 +106,30 @@ class PreparedAnswer:
     clarify_text:  str = ""            # non-empty → show this, skip the LLM
     images:        List[str] = field(default_factory=list)   # page images of the passages used
     sources:       List[str] = field(default_factory=list)   # "Book, p. 12" for each passage used
+    # What changes every message (facts found, rules for this answer, tone).
+    # It travels WITH the newest message instead of in system_prompt, so the
+    # model can reuse its memory of the chat so far: Ollama skips re-reading
+    # whatever starts the same as last time (with_turn_context below).
+    turn_context:  str = ""
+
+    @property
+    def full_prompt(self) -> str:
+        """Everything the speaker is told, in order (for tests and the trace)."""
+        return "\n\n".join(x for x in (self.system_prompt, self.turn_context) if x)
+
+
+def with_turn_context(messages: List[Dict], turn_context: str) -> List[Dict]:
+    """
+    The chat to send: history unchanged (so it matches what the model read
+    last time), and this message's context put in front of the newest
+    message only. The saved history keeps just what the person typed.
+    """
+    if not turn_context or not messages or messages[-1].get("role") != "user":
+        return messages
+    last = dict(messages[-1])
+    last["content"] = (f"[For this reply — not part of their message]\n{turn_context}\n\n"
+                       f"[Their message]\n{last['content']}")
+    return messages[:-1] + [last]
 
 
 class QueryPipeline:
@@ -181,7 +205,10 @@ class QueryPipeline:
         # speaker reads the field-manual passages itself, word for word.
         use_librarian = self.librarian.enabled() and routing_plan.intent != Intent.EMERGENCY
         question = user_input
-        if use_librarian:
+        # Low power: no separate request step — the librarian works from the
+        # message as written (one model call fewer per question)
+        low_power = getattr(self.config, "low_power_active", False)
+        if use_librarian and not low_power:
             if progress:
                 progress("Checking the library")
             brief = self.librarian.brief(user_input, previous_question(tab, user_input),
@@ -279,7 +306,8 @@ class QueryPipeline:
         if use_librarian and (raw_chunks or wiki_sources):
             passages = [(self.knowledge.scorer._source_label(r.get("source", ""), r.get("domain", "")),
                          r.get("content", ""))
-                        for r in raw_chunks[:max(1, getattr(self.knowledge, "prompt_passages", 3))]]
+                        for r in (getattr(self.knowledge, "_last_used_chunks", None)
+                                  or raw_chunks[:max(1, getattr(self.knowledge, "prompt_passages", 3))])]
             if not routing_plan.is_strict and tab.id != "medical":
                 passages += self._wiki_passages(search_q, 200)
             facts = self.librarian.extract(question, passages)
@@ -288,9 +316,12 @@ class QueryPipeline:
             if not facts.failed:
                 knowledge_context = facts_block(facts)
 
-        # Step 8: system prompt (order matters — guidance last)
-        system_prompt = self.llm.build_system_prompt(
-            tab_system=self._tab_system(tab),
+        # Step 8: the section's role is the fixed instructions; everything
+        # decided for THIS question (rules, facts, guidance — guidance last)
+        # goes with the newest message
+        system_prompt = self._tab_system(tab)
+        turn_context = self.llm.build_system_prompt(
+            tab_system="",
             user_context=context,
             knowledge_context=knowledge_context,
             confidence_note=confidence_note,
@@ -298,8 +329,9 @@ class QueryPipeline:
                                if follow_up else plan.system_addendum),
             llm_bounds=bounds,
         )
+        turn_context = turn_context.strip()
         if trace:
-            trace.prompt_chars = len(system_prompt)
+            trace.prompt_chars = len(system_prompt) + len(turn_context)
 
         # Step 9: what the user is told about the system's state
         status = self.boundary_message(plan.mode.value, verdict, verdict != "NONE")
@@ -320,6 +352,7 @@ class QueryPipeline:
 
         return PreparedAnswer(
             system_prompt=system_prompt,
+            turn_context=turn_context,
             mode=plan.mode,
             intent=routing_plan.intent.value,
             sufficiency=verdict,
@@ -383,6 +416,10 @@ class QueryPipeline:
         for line in (about_line(self.memory), earlier_topics(tab)):
             if line:
                 parts.append(line)
+
+        # Everything above changes rarely → the fixed instructions. Everything
+        # below changes per message → turn context (see with_turn_context).
+        stable, parts = parts, []
 
         # With two models, anything looked up goes to the librarian first and
         # only its facts reach this prompt (collected here, read in Step 4b)
@@ -457,13 +494,15 @@ class QueryPipeline:
         tone, how = detect_tone(user_input, previous_question(tab, user_input) if tab else "")
         parts.append(f"Right now: {how}")
 
-        system_prompt = "\n\n".join(parts)
+        system_prompt = "\n\n".join(stable)
+        turn_context = "\n\n".join(parts)
         if trace:
             trace.gate_mode = "direct"
             trace.risk_domains = [f"tone:{tone}"]
-            trace.prompt_chars = len(system_prompt)
+            trace.prompt_chars = len(system_prompt) + len(turn_context)
         return PreparedAnswer(
             system_prompt=system_prompt,
+            turn_context=turn_context,
             mode=ResponseMode.DIRECT,
             intent=f"chat_{tone}",          # sets the temperature (core/ai/llm.py)
             sufficiency="NONE",

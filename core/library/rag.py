@@ -315,7 +315,7 @@ class KnowledgeBase:
         # Score each result
         scored = []
         for r in raw_results:
-            conf = self.scorer.score_chunk(r["content"], r["source"])
+            conf = self.scorer.score_chunk(r["content"], r["source"], r.get("domain", ""))
             tier = "tier2"
             if tier_map:
                 key  = r["content"][:50]
@@ -325,11 +325,14 @@ class KnowledgeBase:
                 elif tier == "tier3":
                     conf["score"] = max(0, conf["score"] - 10)
             if r.get("title_hit"):              # an Obsidian note named after the question
-                conf["score"] = max(conf["score"], 80)
+                conf["score"] = max(conf["score"], 92)   # above even the best-graded book
             scored.append({**r, "confidence": conf, "_tier": tier})
 
-        # Sort: tier1 boosted scores first
+        # Sort: tier1 boosted scores first, then move passages that mostly
+        # repeat one already ahead of them to the back — three overlapping
+        # stretches of one book made the model say the same thing three times
         scored.sort(key=lambda x: x["confidence"]["score"], reverse=True)
+        distinct = self._diverse(scored)
 
         # Redundancy check
         redundancy_met, redundancy_note = self.redundancy.redundancy_met(scored)
@@ -353,7 +356,8 @@ class KnowledgeBase:
         }
         self._last_raw_chunks = scored
         # The passages actually put in the prompt: their sources and page images
-        used = scored[:min(n_results, self.prompt_passages)]
+        used = distinct[:min(n_results, self.prompt_passages)]
+        self._last_used_chunks = used
         self._last_images = list(dict.fromkeys(
             r["image_path"] for r in used if r.get("image_path")
         ))
@@ -364,10 +368,28 @@ class KnowledgeBase:
         ))
 
         context = self.scorer.format_for_prompt(
-            scored[:min(n_results, self.prompt_passages)],
+            used,
             query=query, max_words=self.passage_words,
         )
         return context, confidence_note
+
+    @staticmethod
+    def _diverse(chunks: List[Dict], overlap: float = 0.5) -> List[Dict]:
+        """
+        The passages worth reading, best first: one that shares more than
+        `overlap` of its word pairs with a passage ahead of it is left out.
+        """
+        def pairs(text: str):
+            w = text.lower().split()
+            return {(a, b) for a, b in zip(w, w[1:])}
+        kept, seen = [], []
+        for c in chunks:
+            ps = pairs(c.get("content", ""))
+            if ps and any(len(ps & s) / min(len(ps), len(s)) > overlap for s in seen if s):
+                continue
+            kept.append(c)
+            seen.append(ps)
+        return kept
 
     def get_last_scores(self) -> dict:
         return self._last_scores

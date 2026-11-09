@@ -29,6 +29,22 @@ A self-contained AI assistant that works when everything else fails. Built for o
 
 ---
 
+## What it needs (estimates)
+
+| | Minimum | Recommended |
+|---|---|---|
+| **Memory (RAM)** | 8 GB | 16 GB |
+| **Processor** | 4 cores, 64-bit, AVX2 (most CPUs from ~2015) | 6–8 cores, recent |
+| **Graphics** | none — the models run on the processor, slower | NVIDIA with 6 GB+ video memory (RTX 2060 / 3050 or newer) |
+| **Storage** | 16 GB free (the portable folder is ~13 GB) | an SSD, or a USB 3 stick / card |
+| **System** | Windows 10/11 64-bit or Linux | same |
+
+In use it takes about 4.5–5.5 GB of memory: the speaker (~2 GB) and the
+librarian (~1 GB), library search (0.5–1 GB), the window and voice (~0.6 GB).
+Both models fit in about 3 GB of video memory, so even a 4 GB card makes
+replies start almost at once; on a processor alone expect the reply to start
+after a second or two and then write at roughly 10–20 words a second.
+
 ## Quick Start
 
 ### Fastest — one script does it all
@@ -501,8 +517,14 @@ favourite film is Inception"), it **doesn't use it yet**. It goes to the
 | **Edit** | Fix it ("Katie", not "Kate"), then save — saved as confirmed |
 | **Reject** | Never used, and never raised again |
 
-Nothing waiting for review is ever shown to a model. It only picks up plain
-statements like these; it never guesses. Confirmed facts let the chat tab
+Nothing waiting for review is ever shown to a model.
+
+Besides those fixed patterns, after each reply the librarian model also looks
+at what you said for things they miss ("we moved to Galway last year", "my
+brother Tom fixes cars"). Each one must be made of words you actually wrote,
+and it goes to Review marked **not sure · noticed by the model** — nothing is
+used until you accept it. It never slows a reply, only looks at messages about
+yourself, and is off in low-power mode; turn it off in **Settings → You**. Confirmed facts let the chat tab
 talk to you as someone it knows, and it knows the topics of your last few
 chats in that tab (titles only, so a new chat still starts fresh). You can
 also see and change everything in **Settings → You**, or in Obsidian's `Me`
@@ -567,6 +589,13 @@ page itself as a picture (click for full size). Pages are rendered by
 navigation and farming folders — re-run `python tools/ingest.py` after adding PDFs.
 PDFs indexed before their folder had pictures are redone once, automatically,
 on the next `python tools/ingest.py` (you'll see "↻ adding page pictures").
+
+Books are credited by their **real title** ("From: Practical carpentry, p. 12"),
+not the file name an archive gave them. Titles come from inside each PDF, the
+first heading of a guide, or the file name; they're kept in
+`knowledge_base\titles.json`, which you can open and correct — your changes are
+never overwritten. Filled in after every library update, or on its own with
+`python tools/ingest.py --titles`.
 
 ### Follow-up questions
 "why?", "yes but why", "are you sure?" and other short follow-ups keep the
@@ -681,6 +710,22 @@ stamp shows where the time went ("request 300 ms, librarian 450 ms").
 
 If the librarian can't be reached (Ollama down, model not downloaded), the
 speaker reads the passages itself, as before.
+
+### Low-power mode (automatic)
+Once the models have loaded, Prometheus checks the computer — memory,
+processor, graphics card — and asks Ollama whether the models are actually on
+the graphics card. If they're running on the processor (an Orange Pi, an old
+laptop, a PC without a usable graphics card), **low-power mode** turns on and
+a note in the chat says why. It keeps answers quick by:
+- skipping the speaker's separate request to the librarian (the librarian
+  still checks the facts),
+- reading 2 shorter library passages instead of 3, and the librarian less,
+- keeping 10 messages of chat history instead of 20,
+- slightly shorter replies.
+
+**Settings → Model → Performance**: *Automatic* (recommended), *Full* or
+*Low power*. The same page shows what was found ("8 cores · 16 GB memory · no
+graphics card found"). The note only appears when the automatic choice changes.
 
 ### Choosing the models
 Settings → Model has a box for the **speaker** and one for the **librarian**,

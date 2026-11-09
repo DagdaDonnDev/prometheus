@@ -38,7 +38,8 @@ class _ClaimCard(QFrame):
 
         # Step 1: what it understood, and from what
         label, _ = claims.FIELDS.get(claim.field, ("About you", True))
-        kind = QLabel(f"{label} · {_how_sure(claim.confidence)}")
+        kind = QLabel(f"{label} · {_how_sure(claim.confidence)}" +
+                      (" · noticed by the model" if claim.origin == "model" else ""))
         kind.setObjectName("claimKind")
         lay.addWidget(kind)
         what = QLabel(claim.note[:1].upper() + claim.note[1:])

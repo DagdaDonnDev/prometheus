@@ -43,6 +43,16 @@ class Config:
     rag_results: int = 3
     stream_tokens: bool = True
 
+    # Performance (Settings → Model): "auto" picks full or low power from the
+    # hardware (core/app/hardware.py); "full" / "low" force it.
+    # power_last = the last automatic choice, so the notice only shows when it changes.
+    power_mode: str = "auto"
+    power_last: str = ""
+
+    # After a reply, let the librarian notice things you said about yourself
+    # (each one waits in the Review tab until you accept it)
+    notice_facts: bool = True
+
     # Voice
     voice_enabled: bool = True
     stt_enabled: bool = True
@@ -69,6 +79,14 @@ class Config:
     # User
     user_name: Optional[str] = None
     day_start: Optional[str] = None
+
+    def __post_init__(self):
+        # Decided at runtime, never saved (asdict only sees the fields above)
+        # Until this start's hardware check finishes, assume last time's choice
+        self.low_power_active = (self.power_mode == "low" or
+                                 (self.power_mode == "auto" and self.power_last == "low"))
+        self.power_reason = ""
+        self.hardware_summary = ""
 
     def model_for_tab(self, tab_id: str) -> str:
         """The model that talks to you — the same in every tab."""

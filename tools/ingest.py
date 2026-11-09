@@ -1063,6 +1063,11 @@ def main():
         help="Maximum articles to extract from Wikipedia dump (0=all)"
     )
     parser.add_argument(
+        "--titles",
+        action="store_true",
+        help="Fill in readable book titles (knowledge_base/titles.json) — seconds"
+    )
+    parser.add_argument(
         "--stats",
         action="store_true",
         help="Show knowledge base statistics"
@@ -1088,6 +1093,11 @@ def main():
                               extract_only=args.extract_only)
         sys.exit(0 if ok else 1)
 
+    if args.titles:
+        from core.library import titles
+        titles.build(KNOWLEDGE_PATH)
+        return
+
     if args.stats:
         _print_stats()
         return
@@ -1099,6 +1109,9 @@ def main():
 
     ingester = Ingester(rebuild=args.rebuild)
     ingester.ingest_all(source_filter=args.source)
+    # Readable names for any new books (shown under answers)
+    from core.library import titles
+    titles.build(KNOWLEDGE_PATH)
 
 
 def _print_stats():

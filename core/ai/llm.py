@@ -175,7 +175,10 @@ class LLMEngine:
                 **_thinking_off(model),
                 "options": {
                     "num_ctx":     self.config.context_window,
-                    "num_predict": self.config.max_tokens,
+                    # low power: shorter replies (each word costs more on a processor)
+                    "num_predict": (min(self.config.max_tokens, 220)
+                                    if getattr(self.config, "low_power_active", False)
+                                    else self.config.max_tokens),
                     "temperature": temperature,
                     "top_p":       0.9,
                     "repeat_penalty": 1.1,  # Reduce repetitive phrasing
