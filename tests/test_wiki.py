@@ -18,6 +18,7 @@ ARTICLES = {
     "Yesterday_song": "Yesterday is a song by the Beatles.",
     "Breaking_Bad": "Breaking Bad is an American crime drama television series.",
     "Movie": "A movie is a film.",
+    "Your_Name": "Your Name is a 2016 Japanese animated film.",
 }
 
 
@@ -48,6 +49,15 @@ class TestWiki(unittest.TestCase):
     def test_skips_everyday_words(self):
         self.assertEqual(self.titles("I watched a movie yesterday"), [])
         self.assertEqual(self.titles("hey how's it going"), [])
+
+    def test_small_talk_is_not_a_title(self):
+        # From the owner's log: "your name" pulled up the anime "Your Name"
+        self.assertEqual(self.titles("what's your name"), [])
+        self.assertEqual(self.titles("i forgot your name sorry"), [])
+        # …but it still works when it's plainly the film
+        self.assertEqual(self.titles("have you seen your name"), ["Your Name"])
+        self.assertEqual(self.titles("I loved Your Name"), ["Your Name"])
+        self.assertEqual(self.titles("is your name a good film"), ["Your Name"])
 
     def test_disambiguation_prefers_the_real_article(self):
         self.assertEqual(self.titles("Have you seen Inception"), ["Inception (film)"])

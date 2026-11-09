@@ -1134,6 +1134,8 @@ class MainWindow(QMainWindow):
                 setattr(trace, k, v)
         images, sources = getattr(self, "_answer_media", ([], []))
         self._answer_media = ([], [])
+        if trace:   # which pictures went with the reply, for the log
+            trace.images = [os.path.basename(p) for p in images or []]
         timing = self._finish_trace(full_response, tab)
         self.chat_view.finish_assistant_message(
             image_paths=images or None, sources=sources or None, **timing

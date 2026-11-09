@@ -46,6 +46,13 @@ LEAD_IN = {"seen", "watched", "watch", "watching", "heard", "about", "read", "re
            "listen", "listening", "played", "playing", "love", "loved", "like", "liked",
            "hate", "hated", "finished", "started", "recommend", "of"}
 
+# A title starting with one of these ("Your Name", "My Life", "The Office") is
+# only taken when it's clearly a title: capitalised, quoted, after "seen" /
+# "about" …, or with "film" / "show" … in the message — "what's your name"
+# and "at the office" are just talk
+_EVERYDAY_START = {"your", "my", "our", "his", "her", "their", "its", "the", "a", "an", "this",
+                   "that", "these", "those", "some", "no", "i", "you", "we", "me", "it"}
+
 LEAD_IN_PAIRS = {("what", "is"), ("what", "was"), ("who", "is"), ("who", "was"),
                  ("what", "are"), ("who", "are")}
 
@@ -185,13 +192,17 @@ def find_articles(text: str, max_articles: int = 2) -> List[Tuple[str, Path]]:
             gram = words[i:i + n]
             if not gram or all(g in _STOP for g in gram) or gram[-1] in _STOP:
                 continue
+            after_lead_in = (i > 0 and words[i - 1] in LEAD_IN) or \
+                (i > 1 and (words[i - 2], words[i - 1]) in LEAD_IN_PAIRS)
             if n == 1:
                 original = raw[i]
                 capitalised = original[:1].isupper() and i > 0
-                after_lead_in = (i > 0 and words[i - 1] in LEAD_IN) or \
-                    (i > 1 and (words[i - 2], words[i - 1]) in LEAD_IN_PAIRS)
                 generic = gram[0] in MEDIA_HINTS
                 if generic or not (capitalised or gram[0] in quoted or after_lead_in):
+                    continue
+            elif gram[0] in _EVERYDAY_START:
+                capitalised = any(w[:1].isupper() for w in raw[i + 1:i + n])
+                if not (capitalised or " ".join(gram) in quoted or after_lead_in or hint_suffixes):
                     continue
             key = "_".join(gram)
             # Hinted kind first ("inception" + "movie" → inception_film), then the plain title

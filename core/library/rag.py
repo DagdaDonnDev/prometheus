@@ -6,6 +6,7 @@ scored context into prompts.
 
 import os
 import json
+import re
 from typing import List, Dict, Optional, Tuple
 from pathlib import Path
 
@@ -331,7 +332,12 @@ class KnowledgeBase:
         # Sort: tier1 boosted scores first, then move passages that mostly
         # repeat one already ahead of them to the back — three overlapping
         # stretches of one book made the model say the same thing three times
-        scored.sort(key=lambda x: x["confidence"]["score"], reverse=True)
+        # Asked for a picture ("what does hemlock look like")? Passages that
+        # come with a figure go first
+        from core.library.figures import wants_picture
+        picture = wants_picture(query)
+        scored.sort(key=lambda x: (picture and bool(x.get("image_path")), x["confidence"]["score"]),
+                    reverse=True)
         distinct = self._diverse(scored)
 
         # Redundancy check
@@ -456,7 +462,18 @@ class KnowledgeBase:
         domain = chunk.get("domain", "")
         source = chunk.get("source", "")
 
-        # Ingest decides which folders get page images; if one exists, use it
+        # Ingest saves every page as a picture; show one only if that page
+        # (or, when the text points to a figure, the page beside it) really
+        # has a figure — not a photo of more text (core/library/figures)
+        from core.library.figures import figure_pages
+        pages = figure_pages(domain, source)
+        if pages is not None:
+            mentions = re.search(r"\b(fig\.?|figure|plate|illustration|diagram)\b",
+                                 chunk.get("content", ""), re.I)
+            choices = [page_num] + ([page_num + 1, page_num - 1] if mentions else [])
+            page_num = next((n for n in choices if n in pages), 0)
+            if not page_num:
+                return None
         img_path = (
             Path("knowledge_base") / domain / "_images" /
             f"{source}_p{page_num:03d}.jpg"

@@ -88,6 +88,11 @@ class QueryTrace:
     prompt_eval_ms: int = 0         # time spent reading them
     gen_tokens:     int = 0
     gen_ms:         int = 0
+    # What each model said (shortened), so a saved log shows the whole exchange
+    brief_text:     str = ""        # speaker → librarian: "SEARCH … | QUESTION …"
+    librarian_text: str = ""        # librarian's facts, or NOT FOUND
+    response_text:  str = ""        # the reply the person got
+    images:         List[str] = field(default_factory=list)   # pictures shown with it
 
     def breakdown(self) -> str:
         """One line: where the time to the first word went."""
@@ -204,6 +209,7 @@ class QueryTracer:
 
         t = self._current
         t.response_chars = len(response)
+        t.response_text = short(response, 600)
         t.llm_model = model
         t.response_ms = int((time.time() - t.timestamp) * 1000)
         if not t.first_token_ms:
@@ -273,6 +279,12 @@ tracer = QueryTracer()
 
 # ── Summary for logs: python -m core.answers.tracer [N] ────────────────────────────
 
+def short(text: str, limit: int) -> str:
+    """One line, at most limit characters."""
+    t = " ".join((text or "").split())
+    return t if len(t) <= limit else t[:limit].rsplit(" ", 1)[0] + " …"
+
+
 def print_recent(n: int = 10):
     """
     Print the last n replies from memory/query_traces.jsonl, one line each:
@@ -302,6 +314,15 @@ def print_recent(n: int = 10):
         if t.training_status:
             print(f"            training path: {t.training_status} ({t.training_concept or 'no concept'})")
         print(f"            \"{t.query_preview}\"")
+        # Step: what each model said
+        if t.brief_text:
+            print(f"            speaker asked the librarian: {t.brief_text}")
+        if t.librarian_text:
+            print(f"            librarian found: {t.librarian_text}")
+        if t.response_text:
+            print(f"            reply: {t.response_text}")
+        if t.images:
+            print(f"            pictures: {', '.join(t.images)}")
 
     # Why the Training Path's last attempts didn't verify (one line per method)
     hist_path = Path("memory/training/history.json")

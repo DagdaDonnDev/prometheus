@@ -408,6 +408,9 @@ class Ingester:
                     )
                     img_count = len(page_images)
                     total_images += img_count
+                    # Which of those pages really have a figure (only they're shown)
+                    from core.library import figures
+                    figures.record(KNOWLEDGE_PATH, domain, source, figures.scan_pdf(file_path))
 
                 elif is_pdf:
                     # Non-image-eligible PDF: extract full text, no page tracking
@@ -1063,6 +1066,11 @@ def main():
         help="Maximum articles to extract from Wikipedia dump (0=all)"
     )
     parser.add_argument(
+        "--figures",
+        action="store_true",
+        help="Note which PDF pages have a figure, so only those are shown under answers (seconds per book)"
+    )
+    parser.add_argument(
         "--titles",
         action="store_true",
         help="Fill in readable book titles (knowledge_base/titles.json) — seconds"
@@ -1092,6 +1100,11 @@ def main():
                               download=args.download_wikipedia,
                               extract_only=args.extract_only)
         sys.exit(0 if ok else 1)
+
+    if args.figures:
+        from core.library import figures
+        figures.build(KNOWLEDGE_PATH)
+        return
 
     if args.titles:
         from core.library import titles

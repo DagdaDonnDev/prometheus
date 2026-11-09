@@ -148,6 +148,17 @@ Decision layers live in `core/answers/pipeline.py` (`QueryPipeline`, no Qt). The
   title (subtitle after ;/: dropped), md first heading, else cleaned file name unless it looks like a
   code. `confidence._source_label` checks `titles.title_for(source)` first (cached by mtime).
 
+## Figure pages + log text (2026-11-09) — core/library/figures.py
+- Owner: "a hard time to provide usable images" — ingest renders EVERY PDF page. `scan_pdf` marks
+  figure pages (caption regex / words < 45% of the book's median but ≥25 / placed image 5–85% of the
+  page / >40 drawings) → `<domain>/_images/figures.json`; ingest records it, `--figures` back-fills.
+  `rag._resolve_image`: unscanned book → old behaviour; else only figure pages (±1 if text mentions
+  a figure). `wants_picture(query)` → `_score_and_format` sorts image-carrying passages first.
+- `wiki_lookup.find_articles`: n≥2 grams starting with `_EVERYDAY_START` (your/my/the…) need a
+  capitalised later word, quotes, a lead-in or a media hint ("your name" → anime "Your Name" in the log).
+- Trace: `brief_text`, `librarian_text` (`pipeline._facts_note`), `response_text` (600 chars),
+  `images` → printed by `tracer.print_recent` (debug_run log).
+
 ## Model-noticed facts (2026-11-09) — core/you/notice.py
 - After `_on_response_done` → `_notice_facts(text)` on a thread (not low power, two_models,
   `config.notice_facts`): `worth_asking` (first-person, ≥4 words, not just a question) → librarian with

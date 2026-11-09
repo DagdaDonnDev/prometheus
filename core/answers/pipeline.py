@@ -28,6 +28,7 @@ from typing import Dict, List, Optional
 
 from core.answers.intent_router import IntentRouter, RoutingPlan
 from core.ai.librarian import facts_block
+from core.answers.tracer import short
 from core.answers.sufficiency_gate import SourceSufficiencyGate
 from core.answers.contradiction import ContradictionDetector
 from core.answers.decision_gate import DecisionGate, ResponseMode
@@ -93,6 +94,14 @@ BOUNDARY_SIGNALS = {
     "clarify":   "❓ Clarification needed before proceeding",
     "cautious":  "⚠ Caution mode — verify before acting",
 }
+
+
+
+def _facts_note(facts) -> str:
+    """The librarian's answer for the log."""
+    if facts.failed:
+        return "(couldn't be asked)"
+    return short(facts.text, 500) if facts.found and facts.text else "NOT FOUND"
 
 
 @dataclass
@@ -217,6 +226,7 @@ class QueryPipeline:
             question = brief.question
             if trace:
                 trace.brief_ms = brief.ms
+                trace.brief_text = short(f"SEARCH {brief.search} | QUESTION {brief.question}", 300)
         knowledge_context, confidence_note = self.knowledge.search(
             query=search_q, routing_plan=routing_plan,
         )
@@ -313,6 +323,7 @@ class QueryPipeline:
             facts = self.librarian.extract(question, passages)
             if trace:
                 trace.librarian_ms = facts.ms
+                trace.librarian_text = _facts_note(facts)
             if not facts.failed:
                 knowledge_context = facts_block(facts)
 
@@ -480,6 +491,7 @@ class QueryPipeline:
             facts = self.librarian.extract(question, passages)
             if trace:
                 trace.librarian_ms = facts.ms
+                trace.librarian_text = _facts_note(facts)
             if facts.failed:            # librarian unreachable: the speaker reads them itself
                 parts.append("Background from the library — use only this for facts about it:\n" +
                              "\n\n".join(f"{label}: {' '.join(text.split()[:110])}"

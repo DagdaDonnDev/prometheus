@@ -590,6 +590,17 @@ navigation and farming folders — re-run `python tools/ingest.py` after adding 
 PDFs indexed before their folder had pictures are redone once, automatically,
 on the next `python tools/ingest.py` (you'll see "↻ adding page pictures").
 
+Only pages that **really have a picture** are shown — a drawing, a photo, a
+"Fig. 3" caption, or a page that's mostly not text. A page of plain text isn't
+shown any more. When the passage says "see Fig. 3" and the figure is on the
+next page, that page is shown instead. Ask for one ("do you have a picture of
+hemlock", "what does … look like", "how would I identify …") and passages that
+come with a figure are put first. Which pages have figures is noted in
+`knowledge_base\<folder>\_images\figures.json`, done by every library update;
+for books already in your library, run once (seconds per book, no re-indexing):
+
+    python tools\ingest.py --figures
+
 Books are credited by their **real title** ("From: Practical carpentry, p. 12"),
 not the file name an archive gave them. Titles come from inside each PDF, the
 first heading of a guide, or the file name; they're kept in
@@ -883,6 +894,7 @@ prometheus/
 │   ├── platform_info.py       # Android / phone-layout detection
 │   ├── intent_router.py       # 10 intents, domain tiers, Training Path flag
 │   ├── rag.py                 # Tiered knowledge search, image lookup
+│   ├── figures.py             # Which book pages have a picture on them
 │   ├── sufficiency_gate.py    # SUFFICIENT / WEAK / CONFLICTING / NONE
 │   ├── contradiction.py       # Opposing-claim and numeric conflict checks
 │   ├── decision_gate.py       # EMERGENCY / SAFE_MODE / CLARIFY / CAUTIOUS / DIRECT
@@ -956,7 +968,9 @@ prometheus/
 Double-click `debug_run.bat`. It runs Prometheus normally. When you close it,
 `logs\run_<date>_<time>.log` holds your Python/PySide6/Ollama versions, the
 installed and loaded models, your settings, everything the app printed
-(errors included) and the last 10 replies with where each wait came from. The
+(errors included) and the last 10 replies with where each wait came from —
+and what each model said: the speaker's request to the librarian, the facts the
+librarian found (or NOT FOUND), the reply you got, and any pictures shown. The
 folder opens with the file selected, ready to send. `logs/` isn't committed.
 
 ## Testing
