@@ -5,11 +5,11 @@ Keeps UI responsive during LLM generation and initialization.
 
 from PySide6.QtCore import QThread, Signal
 
-from core.llm import LLMEngine
-from core.rag import KnowledgeBase
-from core.stt import STTEngine
-from core.config import Config
-from core.pipeline import QueryPipeline
+from core.ai.llm import LLMEngine
+from core.library.rag import KnowledgeBase
+from core.voice.stt import STTEngine
+from core.app.config import Config
+from core.answers.pipeline import QueryPipeline
 
 
 class LLMWorker(QThread):
@@ -114,7 +114,7 @@ class OllamaCheckWorker(QThread):
     def run(self):
         # Step 1: if the model lives in prometheus/models, start our own Ollama
         # for it (port 11435) and give it a few seconds to come up
-        from core import ollama_local
+        from core.ai import ollama_local
         ollama_local.start(wait=8)
         # Step 2: find whichever Ollama answers
         reachable = self.llm.is_available()
@@ -140,7 +140,7 @@ class InitWorker(QThread):
         # List Wikipedia's article titles now, in the background, so the first
         # chat message doesn't pay for it (can take seconds with ~200k files)
         try:
-            from core import wiki_lookup
+            from core.library import wiki_lookup
             n = wiki_lookup.article_count()
             if n:
                 self.status_update.emit(f"Wikipedia: {n:,} articles ready")

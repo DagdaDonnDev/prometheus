@@ -36,3 +36,7 @@ logs/
 assets/icon.ico
 assets/icon.icns
 piper/
+
+# make_portable.py: copies kept inside the folder, never committed
+runtime/
+ollama/

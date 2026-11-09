@@ -2,8 +2,8 @@
 
 import unittest
 
-from core import profile
-from core.tabs import Tab
+from core.you import profile
+from core.you.tabs import Tab
 
 
 class _Mem:
@@ -22,7 +22,7 @@ class _TempClaims(unittest.TestCase):
     def setUp(self):
         import os, tempfile
         from unittest import mock
-        from core import claims
+        from core.you import claims
         self.tmp = tempfile.TemporaryDirectory()
         self.p = mock.patch.object(claims, "DB_PATH", os.path.join(self.tmp.name, "claims.sqlite"))
         self.p.start()
@@ -71,7 +71,7 @@ class TestLearn(_TempClaims):
 
 class TestCompanionLines(_TempClaims):
     def test_about_line_uses_only_accepted_facts(self):
-        from core import claims
+        from core.you import claims
         m = _Mem()
         self.assertEqual(profile.about_line(m), "")
         profile.learn("I live in Cork. My sister Kate is great. I love hiking.", m)

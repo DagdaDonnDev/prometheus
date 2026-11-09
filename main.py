@@ -10,7 +10,7 @@ import os
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 # Offline app: if the search model is already downloaded, never ask Hugging Face
-from core.embedder import use_offline_cache_if_present
+from core.ai.embedder import use_offline_cache_if_present
 use_offline_cache_if_present()
 
 # Step 1: check the packages the window needs before importing it, so a
@@ -34,7 +34,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon, QFontDatabase, QFont
 
 from ui.main_window import MainWindow
-from core.config import Config
+from core.app.config import Config
 
 
 def main():

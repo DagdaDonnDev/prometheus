@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from core import obsidian
-from core.tabs import Tab
+from core.library import obsidian
+from core.you.tabs import Tab
 
 
 class _Mem:
@@ -36,7 +36,7 @@ class Base(unittest.TestCase):
         self.vault.mkdir()
         self.state = mock.patch.object(obsidian, "STATE_PATH", root / "state.json")
         self.state.start()
-        self.nowiki = mock.patch("core.wiki_lookup.find_articles", return_value=[])
+        self.nowiki = mock.patch("core.library.wiki_lookup.find_articles", return_value=[])
         self.nowiki.start()
         obsidian.set_vault(str(self.vault))
 
@@ -185,7 +185,7 @@ class TestOwnNotes(Base):
         self.assertRegex(hub, r"\|\d+ \w{3} · is my sourdough starter ok\]\]")
 
     def test_note_named_after_question_is_used(self):
-        from core.rag import KnowledgeBase
+        from core.library.rag import KnowledgeBase
         kb = KnowledgeBase.__new__(KnowledgeBase)
         KnowledgeBase.__init__(kb)
         kb.prompt_passages = 1

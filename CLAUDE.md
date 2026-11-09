@@ -5,14 +5,24 @@ through Ollama, ChromaDB + sentence-transformers retrieval (JSON keyword fallbac
 Piper TTS, Faster-Whisper STT. No network after setup.
 
 ## Run and test
-- `python main.py` (needs Ollama installed and the default model in prometheus/models: `python -m core.ollama_local --move` or `--pull hf.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF:latest`)
+- `python main.py` (needs Ollama installed and the default model in prometheus/models: `python -m core.ai.ollama_local --move` or `--pull hf.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF:latest`)
 - `python -m unittest discover tests` — Training Path (no Ollama, no Qt)
-- `python -c "from core.eval_harness import EvalHarness; EvalHarness().run_all()"` — 22 decision-layer checks, must stay 22/22
+- `python -c "from core.answers.eval_harness import EvalHarness; EvalHarness().run_all()"` — 22 decision-layer checks, must stay 22/22
 - Both run from the Dev Panel (Ctrl+D → Eval)
 - Offscreen UI check: `QT_QPA_PLATFORM=offscreen`, patch `LLMEngine.stream/complete`
 
-## Query flow (ui/main_window.py + core/pipeline.py)
-Decision layers live in `core/pipeline.py` (`QueryPipeline`, no Qt). The window handles threads/UI.
+## Layout (reorganised 2026-11-09)
+- Root: main.py, launchers, setup/debug .bat/.sh, docs. `tools/` = runnable scripts (each chdirs to
+  the project root and puts it on sys.path; `ROOT_DIR`/`ROOT` = parent.parent). `tools` is a package
+  (tests import `tools.make_portable`).
+- core/{ai, answers, library, you, voice, app, training}; ui/{chat, panels, dialogs} + main_window,
+  workers, layout_helpers, style.qss. `core.app.paths.PROJECT_DIR` / `core.ai.ollama_local.PROJECT_DIR`
+  = parent.parent.parent. Commands: `python tools/ingest.py …`, `python -m core.ai.ollama_local …`.
+- Owner unzips over the old copy → `python tools/remove_old_layout.py` deletes moved files (only when
+  the new one exists). bootstrap.py no longer deletes itself.
+
+## Query flow (ui/main_window.py + core/answers/pipeline.py)
+Decision layers live in `core/answers/pipeline.py` (`QueryPipeline`, no Qt). The window handles threads/UI.
 `_generate_response` → trace + `pipeline.route()` → fork:
 - **Training Path** when `routing_plan.use_training_path` (tab in electronics/chemistry/build/navigation,
   intent EXPLAIN or ASSESS, not strict). `TrainingWorker` (QThread) runs `DerivationEngine.run()`.
@@ -47,10 +57,10 @@ Decision layers live in `core/pipeline.py` (`QueryPipeline`, no Qt). The window 
 - Readable step-by-step comments ("Step 1: …").
 - Keep README current with every change.
 - Desktop and Android are one app: the APK is the same PySide6 code built with
-  `pyside6-android-deploy` (shiboken6) via `build_apk.py`. Phone differences go through
+  `pyside6-android-deploy` (shiboken6) via `tools/build_apk.py`. Phone differences go through
   `core/platform_info.PHONE_LAYOUT` (preview: `PROMETHEUS_PHONE_LAYOUT=1`) and
   `ui/layout_helpers.size_dialog`. Never hard-code a minimum width above ~400px without a phone branch.
-- Android build: owner has the PySide6/shiboken6 Android wheels locally. `build_apk.py` wraps the
+- Android build: owner has the PySide6/shiboken6 Android wheels locally. `tools/build_apk.py` wraps the
   deploy tool's `BuildozerConfig` to add .md/.qss/.json files, requests/sqlite3, network permissions,
   and to exclude memory/. Can't be built in the cloud sandbox (download.qt.io and NDK blocked).
 - Deliver as a commit plus a zip of changed files; the owner pushes.
@@ -72,20 +82,20 @@ Decision layers live in `core/pipeline.py` (`QueryPipeline`, no Qt). The window 
   #2b3040 border), neutral text, amber #f0a500 only in bars/borders/fills.
   `QLabel { background: transparent }`. Small square buttons need `padding: 0`.
 - Layout: header (☰ `_chats_btn` → `_toggle_chats`, logo, name, day; Situation check, Skills, Map,
-  Info, Settings, More ▾) / splitter: `NavPanel` (ui/nav_panel.py: Quick help, Sections list, then the
+  Info, Settings, More ▾) / splitter: `NavPanel` (ui/chat/nav_panel.py: Quick help, Sections list, then the
   embedded ChatsPanel) | `_chat_pane` (ChatView + InputBar) | Sidebar. Wiki/Review widgets are
   inserted at splitter index 1 and hide `_chat_pane`. `self.tab_bar` IS the NavPanel (same API as the
   old TabBar: set_active/set_label/refresh/_buttons; ui/tab_bar.py deleted).
 - Phone: ☰ swaps the whole screen to the menu; picking a section/chat closes it. Day label hidden.
 - Chat: centred column (max 820), user = `#bubble_user` rounded fill right-aligned, `fit_width()` so
   short messages aren't clipped; assistant = plain text. Composer `#composer` (rounded box, mic + send).
-- Companion tab is first and the default. No first-launch popup: empty tabs show `ui/welcome.py`
+- Companion tab is first and the default. No first-launch popup: empty tabs show `ui/chat/welcome.py`
   (intro + suggestions); only Survival offers the situation check, until `user.assessment_done`.
 - Sidebar starts hidden until memory has something (`_has_situation_data`).
 - Ollama: `OllamaCheckWorker` (QThread) — never check on the UI thread; retries every 10 s;
   `is_available()` falls back from localhost to 127.0.0.1.
 
-## Two models (2026-11-09) — core/librarian.py
+## Two models (2026-11-09) — core/ai/librarian.py
 - `config.speaker_model` (qwen3:1.7b; `model_for_tab` → it, every tab) talks; `config.librarian_model`
   (LFM2.5) only extracts; `two_models` toggle. `_thinking_off(model)` sends `think: false` only to
   qwen3/deepseek-r1/qwq/magistral (Ollama rejects it for others); `strip_thinking` + stream filter.
@@ -125,26 +135,26 @@ Decision layers live in `core/pipeline.py` (`QueryPipeline`, no Qt). The window 
 - One shared embedder (`core/embedder.get_embedder`); offline (HF_HUB_OFFLINE) once cached.
 - ingest re-does image-eligible PDFs whose processed entry lacks `"paged": True` (pictures + page_num).
 - Follow-ups (`pipeline.is_follow_up`) search with the previous question + FOLLOW_UP_NOTE.
-- `python -m core.tracer` also prints the last Training Path attempts (problems + raw output start).
+- `python -m core.answers.tracer` also prints the last Training Path attempts (problems + raw output start).
 
 ## Wikipedia
 - Owner hadn't extracted it (old parser found 0 articles anyway). `--extract-only` extracts without
-  the hours-long indexing; `core/wiki_lookup` reads the extracted files directly.
+  the hours-long indexing; `core/library/wiki_lookup` reads the extracted files directly.
 - `find_articles(text)`: n-grams (1–6 words) → file stems, media-hint suffixes (_film, _tv_series…),
   disambiguation → variant, single words only if Capitalised / quoted / after LEAD_IN ("seen", "about",
   "what is"…), never generic MEDIA_HINTS words. ~0.1 ms with 100k titles (listing: ~0.5 s once, cached).
 - Used by `pipeline._wikipedia_background`: chat tab always; knowledge tabs only non-strict and not medical.
-- Full-text: `core/wiki_index` (SQLite FTS5, porter, title weight 10, last word prefix,
+- Full-text: `core/library/wiki_index` (SQLite FTS5, porter, title weight 10, last word prefix,
   AND then OR fallback) → `knowledge_base/wikipedia_search.sqlite`. Built after every extraction and by
-  `ingest.py --wiki-index`. 50k articles: 3 s build, ~25–65 ms per search.
+  `tools/ingest.py --wiki-index`. 50k articles: 3 s build, ~25–65 ms per search.
 - NEVER load Wikipedia into memory at startup: `rag.SKIP_IN_MEMORY` skips the folder in the raw-file
   scan and filters it from chunks_fallback.json; ingest never writes it there. (Owner had no JSON →
   raw scan read every extracted article on the UI thread → window never appeared.) InitWorker pre-lists titles.
-- Wikipedia tab = tab 2 (`id="wikipedia"`, not a chat): `ui/wiki_search.py`, search on a QThread,
+- Wikipedia tab = tab 2 (`id="wikipedia"`, not a chat): `ui/panels/wiki_search.py`, search on a QThread,
   title ranking + vector matches when indexed; "Ask about this" → chat tab "Tell me about <title>".
 
-## Full English Wikipedia (2026-11-09) — core/wiki_full.py
-- `ingest.py --download-wikipedia-full [--top N] [--workers N]` / `--wikipedia-full DUMP`:
+## Full English Wikipedia (2026-11-09) — core/library/wiki_full.py
+- `tools/ingest.py --download-wikipedia-full [--top N] [--workers N]` / `--wikipedia-full DUMP`:
   enwiki multistream dump + index (download_wikipedia generalised: dump_name/sums_name; checksum
   matched on the part after the date). Jobs = 50 bz2 streams each; multiprocessing (spawn on Windows).
 - Pass 1 `_scan`: link targets → blake2b 64-bit → two 2^26 uint32 count-min tables (512 MB), workers
@@ -180,7 +190,7 @@ Decision layers live in `core/pipeline.py` (`QueryPipeline`, no Qt). The window 
 - `Tab.history/summary` = the CURRENT chat (rest of the app unchanged); `chat_id/chat_title/chat_created`
   describe it; `Tab.chats` = saved chat records {id,title,created,updated,history,summary}.
   `new_chat()` archives (only if non-empty) and empties; `open_chat/delete_chat/rename_chat/all_chats(query)`.
-- `ui/chats_panel.py` = left column of the splitter (chats | chat_view | sidebar). Hidden on the
+- `ui/chat/chats_panel.py` = left column of the splitter (chats | chat_view | sidebar). Hidden on the
   Wikipedia tab; phone swaps it with chat_view. Refresh after send/response/switch/reset.
   Button checked state uses `not isHidden()` (isVisibleTo is wrong before the window is shown).
 - `clear_tab(id)` empties the open chat; `every_chat=True` also drops saved chats.
@@ -188,7 +198,7 @@ Decision layers live in `core/pipeline.py` (`QueryPipeline`, no Qt). The window 
 ## Profile + claims (2026-11-09)
 - `core/profile.extract(text)` → `claims.Claim(field, value, note, utterance, confidence)` (regex only,
   errs toward nothing). `profile.learn()` = `claims.stage(extract(text), memory)` — NEVER writes memory.
-- `core/claims.py` (memory/claims.sqlite): pending → `accept(id, memory, edited_value)` (writes
+- `core/you/claims.py` (memory/claims.sqlite): pending → `accept(id, memory, edited_value)` (writes
   memory.user + `verified` row with verified_by_user=1 and the utterance) / `reject(id)` (`rejected`,
   never re-staged). Already-in-profile, pending, verified or rejected values aren't staged again.
 - Review tab: `Tab(id="review")` (last in DEFAULT_TABS, not a chat) → `ui/review_panel.ReviewPanel`
@@ -196,7 +206,7 @@ Decision layers live in `core/pipeline.py` (`QueryPipeline`, no Qt). The window 
 - Companion prompt: `about_line` (memory only = verified) + `earlier_topics(tab)` (last 3 chat TITLES).
   Settings → You and Obsidian Me edits write memory directly (they are the verification).
 
-## Obsidian (2026-11-06) — core/obsidian.py, no Qt
+## Obsidian (2026-11-06) — core/library/obsidian.py, no Qt
 - `config.obsidian_vault/obsidian_use_notes`; `obsidian.set_vault()` at startup + after Settings.
 - `sync(memory, tab_manager)` (close + Settings → Obsidian → Update now): read back Me.md → write
   <vault>/Prometheus/{Me, <Tab>, Chats/*, Topics/*}.md, only changed files; links are full paths
@@ -208,7 +218,7 @@ Decision layers live in `core/pipeline.py` (`QueryPipeline`, no Qt). The window 
   `search_notes` → rag `_tiered_search` as tier 1 (not strict, not medical); `title_hit` → score ≥80.
   `notes_named_in` → companion "From their own notes" (and suppresses the not-in-library rule).
 
-## Model folder (2026-11-06) — core/ollama_local.py, stdlib only
+## Model folder (2026-11-06) — core/ai/ollama_local.py, stdlib only
 - Models live in `prometheus/models` (gitignored, excluded from the APK). When it has a manifest,
   `OllamaCheckWorker` calls `ollama_local.start()` → own `ollama serve` with OLLAMA_MODELS=models,
   OLLAMA_HOST=127.0.0.1:11435; `LLMEngine._candidate_urls` tries it first; closeEvent stops only ours.
@@ -218,7 +228,7 @@ Decision layers live in `core/pipeline.py` (`QueryPipeline`, no Qt). The window 
 - Local HTTP checks use a no-proxy opener (a system proxy swallowed 127.0.0.1 requests).
 
 ## Voice (2026-11-06)
-- `setup_voice.py`: pip faster-whisper + sounddevice (checked separately) → Whisper model into
+- `tools/setup_voice.py`: pip faster-whisper + sounddevice (checked separately) → Whisper model into
   models/whisper/<size> (`faster_whisper.utils.download_model`) → Piper release zip/tar into
   prometheus/piper/ (gitignored, APK-excluded) → voices/ (copies from setup_dir if empty) →
   round trip (Piper speaks TEST_SENTENCE, Whisper transcribes) → microphones. `--check` = no downloads.
@@ -241,6 +251,16 @@ Decision layers live in `core/pipeline.py` (`QueryPipeline`, no Qt). The window 
   while waiting. `transcribe_samples` feeds numpy straight to Whisper (vad_filter) on a thread.
 - Sandbox: GitHub reachable (Piper + rhasspy/piper etc/test_voice.onnx), Hugging Face blocked.
 
+## Portable folder (2026-11-09) — tools/make_portable.py
+- Steps: models (`ollama_local.move_model(dst=MODELS_DIR)` for speaker + librarian) → Ollama install
+  copied to prometheus/ollama (Windows: whole Programs\Ollama dir; Linux: bin + ../lib/ollama) →
+  Piper dir (with espeak-ng-data) + Whisper snapshot from HF caches → Windows: python.org embeddable
+  build (same version, else 3.12.10) in runtime/python, `enable_site_packages` edits ._pth, get-pip,
+  `pip install -r requirements.txt`; other OS: `pip download` into wheels/ → launchers. `--check`.
+- `ollama_local.find_ollama` prefers prometheus/ollama. Prometheus.bat/prometheus.sh committed;
+  setup.bat + debug_run.bat prefer runtime\python. runtime/ and ollama/ gitignored + APK-excluded.
+- python.org and bootstrap.pypa.io are blocked in the sandbox: the Python step is untested here.
+
 ## Icon
 - `assets/icon.png` (owner's design: open hand, flame above, navy square). main.py setWindowIcon +
   Windows AppUserModelID; header logo 26px; build_exe makes .ico/.icns (Pillow, gitignored);
@@ -254,15 +274,15 @@ Decision layers live in `core/pipeline.py` (`QueryPipeline`, no Qt). The window 
   Downloaded books stay local. Owner's local library (listed 2026-11-05): ~60 PDFs/TXTs across
   22 domains, plus the six hand-written guides (companion, emergency_medicine, food_preservation,
   navigation, soap_making, water_purification).
-- `ingest.py` skips identical-content files (SHA-256) so one book can't count as two sources,
+- `tools/ingest.py` skips identical-content files (SHA-256) so one book can't count as two sources,
   removes deleted files' chunks, replaces edited files' chunks in both stores, and always writes
   `memory/chunks_fallback.json` (even with ChromaDB). Tested with chromadb 1.5 + a fake embedder.
   Exception: with ChromaDB, `wikipedia` chunks are kept out of the JSON (it's loaded into RAM).
-- Wikipedia: `python ingest.py --download-wikipedia` (Simple English pages-articles.xml.bz2,
+- Wikipedia: `python tools/ingest.py --download-wikipedia` (Simple English pages-articles.xml.bz2,
   resume + SHA-1 check). Parser strips any export-schema namespace (the old fixed
   "Export-0.10" string matched nothing → 0 articles) and keeps `<ns>0</ns>` pages only.
 
 ## Known gaps
 - Voice (Piper, Faster-Whisper) is desktop-only; Android shows no voice.
-- Whisper transcription untested here (model download blocked); setup_voice.py's round trip checks it on the owner's PC.
+- Whisper transcription untested here (model download blocked); tools/setup_voice.py's round trip checks it on the owner's PC.
 - APK build not yet run end to end (needs the owner's wheels + NDK).

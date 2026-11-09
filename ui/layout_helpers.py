@@ -4,7 +4,7 @@ Layout helpers shared by every window, so desktop and phone stay one app.
 
 from PySide6.QtCore import Qt
 
-from core.platform_info import PHONE_LAYOUT
+from core.app.platform_info import PHONE_LAYOUT
 
 
 def size_dialog(dialog, min_w: int, min_h: int, w: int, h: int):

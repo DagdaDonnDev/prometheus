@@ -6,8 +6,8 @@ import tempfile
 import unittest
 from unittest import mock
 
-from core import config as cfgmod
-from core.config import Config
+from core.app import config as cfgmod
+from core.app.config import Config
 
 
 class TestConfig(unittest.TestCase):

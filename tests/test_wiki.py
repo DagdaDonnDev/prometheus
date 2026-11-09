@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import core.wiki_lookup as w
+import core.library.wiki_lookup as w
 
 
 ARTICLES = {
@@ -64,7 +64,7 @@ class TestWiki(unittest.TestCase):
         self.assertNotIn("# ", w.lead(p, 50))
 
     def test_full_text_finds_words_inside_articles(self):
-        from core import wiki_index
+        from core.library import wiki_index
         idx = w.WIKI_DIR.parent / "wikipedia_search.sqlite"
         self.assertEqual(wiki_index.build_index(w.WIKI_DIR, idx, progress=lambda m: None), len(ARTICLES))
         try:

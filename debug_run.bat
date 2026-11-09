@@ -22,6 +22,8 @@ REM Use the Python that actually has Prometheus's packages installed.
 REM ("py" can open a different install than "python" - e.g. a fresh 3.14
 REM from the Python install manager with nothing in it.)
 set "PY="
+REM The portable Python inside this folder comes first (tools\make_portable.py)
+if exist "runtime\python\python.exe" set "PY=runtime\python\python.exe"
 for %%P in ("python" "py -3" "python3") do (
   if not defined PY (
     %%~P -c "import PySide6, requests" >nul 2>nul && set "PY=%%~P"
@@ -52,7 +54,7 @@ REM -- Step 1: versions --------------------------------------------
   echo --- Ollama ---
   ollama --version
   echo Models in prometheus\models:
-  %PY% -m core.ollama_local --list
+  %PY% -m core.ai.ollama_local --list
   echo Models in Ollama's usual folder:
   ollama list
   echo Loaded right now:
@@ -74,7 +76,7 @@ REM -- Step 3: what happened -----------------------------------------
   echo ===== Prometheus closed, exit code %CODE% =====
   echo.
   echo --- Replies this run ^(last 10^) ---
-  %PY% -m core.tracer 10
+  %PY% -m core.answers.tracer 10
   echo.
   echo --- Ollama after the run ---
   ollama ps

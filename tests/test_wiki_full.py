@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from core import wiki_full, wiki_index, wiki_lookup
+from core.library import wiki_full, wiki_index, wiki_lookup
 
 
 def _page(pid, title, text, ns=0, redirect=""):

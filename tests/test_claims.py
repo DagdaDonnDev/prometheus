@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from core import claims, profile
+from core.you import claims, profile
 
 
 class _Mem:

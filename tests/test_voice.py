@@ -4,9 +4,9 @@ import builtins
 import unittest
 from unittest import mock
 
-from core.config import Config
-from core.tts import TTSEngine, clean_for_speech
-from core.stt import STTEngine
+from core.app.config import Config
+from core.voice.tts import TTSEngine, clean_for_speech
+from core.voice.stt import STTEngine
 
 
 def _engine():
@@ -87,7 +87,7 @@ class TestWhisper(unittest.TestCase):
         with mock.patch("builtins.__import__", no_whisper):
             stt.initialize(notes.append)
         self.assertFalse(stt.available)
-        self.assertIn("setup_voice.py", stt.error)
+        self.assertIn("tools/setup_voice.py", stt.error)
         self.assertEqual(notes, [stt.error])
 
     def test_model_failure_is_reported_not_raised(self):
@@ -110,7 +110,7 @@ import numpy as np
 import sys
 import threading
 import time
-from core import stt as stt_mod
+from core.voice import stt as stt_mod
 
 
 def _blocks(level, seconds, seed=0):

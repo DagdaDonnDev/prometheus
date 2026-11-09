@@ -2,7 +2,7 @@
 
 import unittest
 
-from core.tabs import Tab, TabManager
+from core.you.tabs import Tab, TabManager
 
 
 def _tab():

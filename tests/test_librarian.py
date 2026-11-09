@@ -3,11 +3,11 @@
 import unittest
 from unittest import mock
 
-from core.config import Config
-from core.librarian import Librarian, facts_block
+from core.app.config import Config
+from core.ai.librarian import Librarian, facts_block
 
 
-from core.llm import LLMEngine
+from core.ai.llm import LLMEngine
 
 
 class FakeLLM(LLMEngine):
@@ -61,10 +61,10 @@ class TestLibrarian(unittest.TestCase):
 
 class TestPipelineWithTwoModels(unittest.TestCase):
     def setUp(self):
-        from core.memory import Memory
-        from core.rag import KnowledgeBase
-        from core.pipeline import QueryPipeline
-        from core.tabs import TabManager
+        from core.you.memory import Memory
+        from core.library.rag import KnowledgeBase
+        from core.answers.pipeline import QueryPipeline
+        from core.you.tabs import TabManager
         self.llm = FakeLLM()
         self.pipe = QueryPipeline(Memory(), KnowledgeBase(), self.llm)
         self.tabs = TabManager()
@@ -87,7 +87,7 @@ class TestPipelineWithTwoModels(unittest.TestCase):
         self.assertEqual(self.llm.calls, [])
 
     def test_small_talk_is_one_call(self):
-        with mock.patch("core.wiki_lookup.find_articles", return_value=[]):
+        with mock.patch("core.library.wiki_lookup.find_articles", return_value=[]):
             out = self.prepare("hey how's it going", "prometheus")
         self.assertEqual(self.llm.calls, [])
         self.assertNotIn("LIBRARY FACTS", out.system_prompt)
@@ -99,7 +99,7 @@ class TestPipelineWithTwoModels(unittest.TestCase):
         self.addCleanup(d.cleanup)
         art = Path(d.name) / "Inception_film.txt"
         art.write_text("# Inception (film)\n\nInception is a 2010 film by Christopher Nolan. " * 20)
-        with mock.patch("core.wiki_lookup.find_articles", return_value=[("Inception (film)", art)]):
+        with mock.patch("core.library.wiki_lookup.find_articles", return_value=[("Inception (film)", art)]):
             out = self.prepare("have you seen inception", "prometheus")
         self.assertEqual([m for m, _, _ in self.llm.calls], [self.llm.config.librarian_model])
         self.assertIn("LIBRARY FACTS", out.system_prompt)

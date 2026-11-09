@@ -7,7 +7,7 @@
 #    3. Check / install Ollama 4. Pull LFM2.5 1.2B
 #    5. Install requirements   6. Build the knowledge base index
 #    7. Offer to launch
-#  Knowledge base downloads (bootstrap.py) are a separate step.
+#  Knowledge base downloads (tools/bootstrap.py) are a separate step.
 # ============================================================
 set -u
 cd "$(dirname "$0")"
@@ -58,11 +58,11 @@ ok "Ollama installed"
 #   librarian LFM2.5 1.2B — reads the library only  (about 730 MB)
 #   4a: already downloaded into Ollama's usual folder? Move them here.
 #   4b: otherwise download them straight into prometheus/models.
-"$PY" -m core.ollama_local --move || true
+"$PY" -m core.ai.ollama_local --move || true
 for MODEL in "qwen3:1.7b" "hf.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF:latest"; do
-    if ! "$PY" -m core.ollama_local --has "$MODEL"; then
+    if ! "$PY" -m core.ai.ollama_local --has "$MODEL"; then
         info "Downloading $MODEL into prometheus/models (first time only)"
-        "$PY" -m core.ollama_local --pull "$MODEL" || fail "Model download failed. Check your connection and run this again."
+        "$PY" -m core.ai.ollama_local --pull "$MODEL" || fail "Model download failed. Check your connection and run this again."
     fi
 done
 ok "Models ready in prometheus/models"
@@ -74,17 +74,17 @@ ok "Packages installed"
 
 # Step 5b: voice (Piper speaks, Whisper listens) — optional
 info "Setting up voice"
-"$PY" setup_voice.py || echo "[!] Voice isn't fully set up — Prometheus still works by text. Fix what's listed above, then run: $PY setup_voice.py"
+"$PY" tools/setup_voice.py || echo "[!] Voice isn't fully set up — Prometheus still works by text. Fix what's listed above, then run: $PY tools/setup_voice.py"
 
 # Step 6: knowledge base
 info "Building the knowledge base index (10–30 min first time)"
-"$PY" ingest.py --init
-"$PY" ingest.py || echo "[!] Indexing reported a problem. You can re-run: $PY ingest.py"
+"$PY" tools/ingest.py --init
+"$PY" tools/ingest.py || echo "[!] Indexing reported a problem. You can re-run: $PY tools/ingest.py"
 ok "Knowledge base indexed"
 echo
 echo " To download the full source library later (about 2 GB):"
-echo "     $PY bootstrap.py"
-echo "     $PY ingest.py"
+echo "     $PY tools/bootstrap.py"
+echo "     $PY tools/ingest.py"
 echo
 
 # Step 7: launch

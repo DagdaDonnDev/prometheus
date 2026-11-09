@@ -1,8 +1,8 @@
-"""Tone read from the message (core/tone.py). Run: python -m unittest discover tests"""
+"""Tone read from the message (core/ai/tone.py). Run: python -m unittest discover tests"""
 
 import unittest
 
-from core.tone import detect_tone
+from core.ai.tone import detect_tone
 
 
 class TestTone(unittest.TestCase):

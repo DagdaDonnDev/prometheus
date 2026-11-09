@@ -5,13 +5,13 @@ No Ollama or Qt needed:  python -m unittest discover tests
 
 import unittest
 
-from core.config import Config
-from core.llm import LLMEngine
-from core.memory import Memory
-from core.pipeline import QueryPipeline
-from core.platform_info import IS_ANDROID
-from core.rag import KnowledgeBase
-from core.tabs import TabManager
+from core.app.config import Config
+from core.ai.llm import LLMEngine
+from core.you.memory import Memory
+from core.answers.pipeline import QueryPipeline
+from core.app.platform_info import IS_ANDROID
+from core.library.rag import KnowledgeBase
+from core.you.tabs import TabManager
 
 
 class TestPipeline(unittest.TestCase):
@@ -62,7 +62,7 @@ class TestPipeline(unittest.TestCase):
     def test_companion_knows_them_and_stays_small(self):
         # What they've told it plus earlier chat titles, and tone still last
         import copy
-        from core.tabs import Tab
+        from core.you.tabs import Tab
         saved = copy.deepcopy(self.pipe.memory.data)
         try:
             u = self.pipe.memory.data["user"]
@@ -86,10 +86,10 @@ class TestPipeline(unittest.TestCase):
     def test_missing_subject_carries_to_follow_ups(self):
         # From the owner's log: the model invented Titanfall lore on follow-ups
         from unittest import mock
-        from core.tabs import Tab
+        from core.you.tabs import Tab
         tab = Tab(id="prometheus", name="Chat", icon="", domains=[], system_prompt="")
         seen = {}
-        with mock.patch("core.wiki_lookup.find_articles", return_value=[]):
+        with mock.patch("core.library.wiki_lookup.find_articles", return_value=[]):
             for q in ["tell me what you know of titanfall 2", "go into the lore",
                       "their missions", "anyway how was your day"]:
                 tab.add_message("user", q)
@@ -133,14 +133,14 @@ class TestPipeline(unittest.TestCase):
         # No article for it → the model is told to say so (patched so a real
         # local Wikipedia that does have "The Juror" can't change the result)
         from unittest import mock
-        with mock.patch("core.wiki_lookup.find_articles", return_value=[]):
+        with mock.patch("core.library.wiki_lookup.find_articles", return_value=[]):
             plan, out = self.prepare("have you seen the juror?", "prometheus")
         self.assertIn('NOT IN YOUR LIBRARY: you have nothing about "the juror"', out.system_prompt)
         plan, out = self.prepare("tell me about your day", "prometheus")
         self.assertNotIn("NOT IN YOUR LIBRARY", out.system_prompt)
 
     def test_default_model(self):
-        from core.config import Config
+        from core.app.config import Config
         self.assertEqual(Config().companion_model, "hf.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF:latest")
 
     def test_not_android_here(self):

@@ -16,33 +16,33 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSize, QObject
 from PySide6.QtGui import QFont, QKeySequence, QShortcut
 
-from core.config import Config
-from core.memory import Memory
-from core.tabs import TabManager, Tab
-from core.rag import KnowledgeBase
-from core.llm import LLMEngine
-from core.tts import TTSEngine
-from core.stt import STTEngine
-from core.context_manager import ContextManager
+from core.app.config import Config
+from core.you.memory import Memory
+from core.you.tabs import TabManager, Tab
+from core.library.rag import KnowledgeBase
+from core.ai.llm import LLMEngine
+from core.voice.tts import TTSEngine
+from core.voice.stt import STTEngine
+from core.ai.context_manager import ContextManager
 
-from ui.chat_view import ChatView
-from ui.input_bar import InputBar
-from ui.sidebar import Sidebar
+from ui.chat.chat_view import ChatView
+from ui.chat.input_bar import InputBar
+from ui.panels.sidebar import Sidebar
 from ui.workers import LLMWorker, InitWorker, TrainingWorker
-from ui.assessment import AssessmentWidget
-from ui.skill_tree import SkillTreeWidget
-from ui.quick_access import QuickAccessWidget
-from core.backup import BackupManager
-from ui.doc_context import DocumentContextWidget
-from core.map_engine import MapEngine
-from ui.map_view import MapWidget
-from core.p2p import P2PEngine
-from ui.messages_view import MessagesWidget
-from core.tabs import suggest_redirect
-from core.tracer import tracer
-from ui.dev_panel import DevPanel
-from core.pipeline import QueryPipeline
-from core.platform_info import PHONE_LAYOUT
+from ui.dialogs.assessment import AssessmentWidget
+from ui.dialogs.skill_tree import SkillTreeWidget
+from ui.panels.quick_access import QuickAccessWidget
+from core.you.backup import BackupManager
+from ui.dialogs.doc_context import DocumentContextWidget
+from core.app.map_engine import MapEngine
+from ui.dialogs.map_view import MapWidget
+from core.app.p2p import P2PEngine
+from ui.panels.messages_view import MessagesWidget
+from core.you.tabs import suggest_redirect
+from core.answers.tracer import tracer
+from ui.dialogs.dev_panel import DevPanel
+from core.answers.pipeline import QueryPipeline
+from core.app.platform_info import PHONE_LAYOUT
 from ui.layout_helpers import size_dialog
 from core.training import TrainingGraph, DerivationEngine, TrainingSession
 
@@ -56,7 +56,7 @@ class MainWindow(QMainWindow):
         self.memory = Memory()
         self.tab_manager = TabManager()
         # Obsidian: take any edits made to Me.md while the app was closed
-        from core import obsidian
+        from core.library import obsidian
         obsidian.set_vault(config.obsidian_vault, config.obsidian_use_notes)
         try:
             obsidian.read_back_only(self.memory)
@@ -72,7 +72,7 @@ class MainWindow(QMainWindow):
         # Decision layers (router, gates, bounds) — shared with Android
         self.pipeline      = QueryPipeline(self.memory, self.knowledge, self.llm, self.map_engine)
         self.p2p           = P2PEngine(self.memory)
-        from core.features import P2P_ENABLED
+        from core.app.features import P2P_ENABLED
         if P2P_ENABLED:          # off until ready — nothing listens on the network
             self.p2p.start()
 
@@ -252,8 +252,8 @@ class MainWindow(QMainWindow):
 
         # Left menu: sections on top, this section's chats underneath
         # (replaces the old row of tabs; same API, so self.tab_bar still works)
-        from ui.chats_panel import ChatsPanel
-        from ui.nav_panel import NavPanel
+        from ui.chat.chats_panel import ChatsPanel
+        from ui.chat.nav_panel import NavPanel
         self.chats_panel = ChatsPanel()
         self.chats_panel.new_chat_requested.connect(self._new_chat)
         self.chats_panel.open_requested.connect(self._open_chat)
@@ -478,7 +478,7 @@ class MainWindow(QMainWindow):
             return
 
         if result["missing"]:
-            pulls = "   ".join(f"python -m core.ollama_local --pull {m}" for m in result["missing"])
+            pulls = "   ".join(f"python -m core.ai.ollama_local --pull {m}" for m in result["missing"])
             self.status_bar.showMessage(
                 f"⚠ Ollama is running but the model isn't installed. Run: {pulls} "
                 "— or pick an installed one in Settings → Model", 0
@@ -723,7 +723,7 @@ class MainWindow(QMainWindow):
         self.input_bar.set_editing(False)
 
     def _show_wiki_panel(self):
-        from ui.wiki_search import WikiSearchWidget
+        from ui.panels.wiki_search import WikiSearchWidget
         self._hide_messages_panel()
         self._hide_review_panel()
         if not hasattr(self, "_wiki_widget"):
@@ -738,7 +738,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"{self.config.assistant_name or 'Prometheus'} — 📖 Wikipedia")
 
     def _show_review_panel(self):
-        from ui.review_panel import ReviewPanel
+        from ui.panels.review_panel import ReviewPanel
         self._hide_messages_panel()
         self._hide_wiki_panel()
         if not hasattr(self, "_review_widget"):
@@ -758,7 +758,7 @@ class MainWindow(QMainWindow):
 
     def _on_review_changed(self, waiting: int = -1):
         """Tab label shows how many are waiting; accepted facts reach the side panel."""
-        from core import claims
+        from core.you import claims
         if waiting < 0:
             waiting = claims.pending_count()
         self.tab_bar.set_label("review", f"Review ({waiting})" if waiting else "Review")
@@ -852,7 +852,7 @@ class MainWindow(QMainWindow):
 
         # Learn what they say about themselves ("my sister Kate", "I live in
         # Cork") — shown briefly so nothing is learned silently
-        from core.profile import learn
+        from core.you.profile import learn
         # (shown once the reply is done, so the "thinking" status doesn't hide it)
         learned = learn(text, self.memory)
         self._learned_note = ("To confirm in the Review tab: " + "; ".join(learned)) if learned else ""
@@ -989,7 +989,7 @@ class MainWindow(QMainWindow):
 
     def _run_knowledge_path(self, tab: Tab, user_input: str, routing_plan, trace):
         """
-        The Knowledge Path. Steps 2–10 run in core/pipeline.py (shared with
+        The Knowledge Path. Steps 2–10 run in core/answers/pipeline.py (shared with
         Android); this method only handles the UI and step 11 (streaming).
         """
         # Steps 2–10 run in the background (with two models they include the
@@ -1116,7 +1116,7 @@ class MainWindow(QMainWindow):
         elif self._voice_mode:
             self._end_voice_mode()
         elif not self.input_bar.voice_ok():
-            self.status_bar.showMessage(self.stt.error or "Voice input isn't set up — run: python setup_voice.py", 6000)
+            self.status_bar.showMessage(self.stt.error or "Voice input isn't set up — run: python tools/setup_voice.py", 6000)
         else:
             self._voice_mode = True
             self.status_bar.showMessage("Voice conversation on — just talk. Click the mic to end it.", 6000)
@@ -1413,12 +1413,12 @@ class MainWindow(QMainWindow):
             self._sidebar_btn.setText("Chat" if not visible else "Info")
 
     def _show_settings(self):
-        from ui.settings_dialog import SettingsDialog
+        from ui.dialogs.settings_dialog import SettingsDialog
         dialog = SettingsDialog(self.config, self.memory, self, obsidian_sync=self._obsidian_sync)
         dialog.exec()
         self.memory.save()
         self.config.save()
-        from core import obsidian
+        from core.library import obsidian
         obsidian.set_vault(self.config.obsidian_vault, self.config.obsidian_use_notes)
         # Apply changes now — no restart needed
         self._apply_assistant_name()
@@ -1437,7 +1437,7 @@ class MainWindow(QMainWindow):
 
     def _obsidian_sync(self) -> str:
         """Read back Me.md edits, then write the mind map. Returns a status line."""
-        from core import obsidian
+        from core.library import obsidian
         if not obsidian.vault_path():
             return "Choose your Obsidian vault folder first."
         try:
@@ -1452,7 +1452,7 @@ class MainWindow(QMainWindow):
         self.tts.shutdown()
         self.p2p.stop()
         # Stop the Ollama we started for prometheus/models (never anyone else's)
-        from core import ollama_local
+        from core.ai import ollama_local
         ollama_local.stop()
         self.tab_manager.save()
         self.memory.save()

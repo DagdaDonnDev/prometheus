@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from core import ollama_local as ol
+from core.ai import ollama_local as ol
 
 
 def _blob(store: Path, data: bytes) -> str:
@@ -136,8 +136,8 @@ class TestOwnServer(unittest.TestCase):
             self.assertTrue(ol.answering())
             self.assertEqual(ol.active_url(), f"http://{host}")
             # The app's Ollama client tries it first
-            from core.llm import LLMEngine
-            from core.config import Config
+            from core.ai.llm import LLMEngine
+            from core.app.config import Config
             llm = LLMEngine(Config())
             self.assertEqual(llm._candidate_urls()[0], f"http://{host}")
             self.assertTrue(llm.is_available())

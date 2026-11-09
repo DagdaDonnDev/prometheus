@@ -40,7 +40,7 @@ bash setup.sh
 Both scripts check Python 3.9+ and pip, check for Ollama (Windows opens the
 download page, Linux/macOS installs it), pull the default model (LFM2.5 1.2B Instruct), install
 requirements, index the knowledge base, then offer to launch.
-Downloading the full source library (`bootstrap.py`, ~2GB) stays a separate step.
+Downloading the full source library (`tools/bootstrap.py`, ~2GB) stays a separate step.
 
 Or step by step:
 
@@ -56,12 +56,12 @@ curl -fsSL https://ollama.ai/install.sh | sh
 The model is kept in `prometheus/models`, so the whole app is one folder you
 can copy or back up. Downloads straight there:
 ```bash
-python -m core.ollama_local --pull hf.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF:latest
+python -m core.ai.ollama_local --pull hf.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF:latest
 ```
 Already pulled it with plain `ollama pull`? Move it in instead (no download;
 every file is checked, then the old copy is removed):
 ```bash
-python -m core.ollama_local --move
+python -m core.ai.ollama_local --move
 ```
 
 ### 3. Install Python dependencies
@@ -71,14 +71,14 @@ python -m pip install -r requirements.txt   # "python -m" installs into the Pyth
 
 ### 4. Download all source materials (one time, needs internet)
 ```bash
-python bootstrap.py
+python tools/bootstrap.py
 ```
 Downloads ~1.9GB–1GB of public domain survival manuals, medical references,
 and practical guides. Self-deletes after completion.
 
 ### 5. Index the knowledge base
 ```bash
-python ingest.py
+python tools/ingest.py
 ```
 Processes all downloaded sources into the searchable vector database.
 Takes 10–30 minutes on first run. Subsequent runs only process new files.
@@ -94,13 +94,70 @@ python main.py
 
 ---
 
+## Where things live
+
+```
+prometheus/
+├── main.py, Prometheus.bat, prometheus.sh   start it
+├── setup.bat, setup.sh, debug_run.bat       first-time setup / a run with a saved log
+├── tools/        commands you run: ingest (library), setup_voice, make_portable,
+│                 bootstrap (downloads), bootstrap_map, generate_reference,
+│                 build_exe, build_apk, remove_old_layout
+├── core/
+│   ├── ai/       the two models and how they're prompted (llm, librarian, tone…)
+│   ├── answers/  how each reply is decided (pipeline, gates, tracer, eval)
+│   ├── library/  search: books, Wikipedia, Obsidian notes
+│   ├── you/      memory, what it knows about you, chats, backups
+│   ├── voice/    speaking (Piper) and listening (Whisper)
+│   ├── app/      settings, paths, phone/desktop, map, messages
+│   └── training/ working things out from first principles
+├── ui/
+│   ├── chat/     the conversation, message box, menu, chats list
+│   ├── panels/   Info, Review, Wikipedia, Quick help
+│   ├── dialogs/  Settings, Situation check, Skills, Map, documents, developer panel
+│   └── main_window.py, style.qss (the whole look)
+├── tests/
+└── assets/ knowledge_base/ memory/ models/ voices/   (+ ollama/ piper/ runtime/ once made portable)
+```
+
+Updating an older copy by unzipping new files over it? Run
+`python tools/remove_old_layout.py` once afterwards — it deletes the files
+that moved (only where the new copy is in place).
+
+## Moving Prometheus to another computer
+
+One command gathers everything into the `prometheus` folder, so you can copy
+the folder to another computer (same system, e.g. Windows → Windows) and run it:
+
+```bash
+python tools/make_portable.py            # gather everything in
+python tools/make_portable.py --check    # just list what's still outside
+```
+
+| What | Where it goes |
+|------|---------------|
+| Both AI models (speaker + librarian) | `models\` (moved, not re-downloaded) |
+| The Ollama program (with its GPU libraries) | `ollama\` — Prometheus uses this copy first |
+| Piper (with its speech data) and the Whisper model | `piper\`, `models\whisper\` (your voices are already in `voices\`) |
+| Python and every package (Windows) | `runtime\python\` — Python's official portable build, downloaded once |
+| Python packages (Linux/macOS) | `wheels\` — installed offline on first start |
+
+Your chats, memory, settings, library and its search index are already inside
+and don't depend on where the folder is. On the new computer just run
+**`Prometheus.bat`** (or `./prometheus.sh`) — no installing. `setup.bat` and
+`debug_run.bat` use the folder's Python too. Expect the folder to be several GB.
+
+Not copied: an Obsidian vault elsewhere (copy it and set it again in
+Settings → Obsidian), and `prometheus_setup` (downloads and sources — the app
+doesn't need it).
+
 ## Voice Setup (Optional — Highly Recommended)
 
 Voice changes the experience from tool to companion. One command sets it up
 and tests it (`setup.bat`/`setup.sh` run it too):
 ```bash
-python setup_voice.py            # install what's missing, then test
-python setup_voice.py --check    # only report, no downloads
+python tools/setup_voice.py            # install what's missing, then test
+python tools/setup_voice.py --check    # only report, no downloads
 ```
 1. Installs **faster-whisper** (listening) and **sounddevice** (microphone)
    into the Python you ran it with.
@@ -157,7 +214,7 @@ model, not the voice:
 | small | ~485 MB | about 4× slower than base | good with accents and background noise |
 | medium | ~1.5 GB | slow on a CPU (several seconds) | best, but too slow to feel like a conversation without a GPU |
 
-After changing it, run `python setup_voice.py` once to download that size
+After changing it, run `python tools/setup_voice.py` once to download that size
 for offline use.
 
 Voice input works once speech recognition has loaded; hover the 🎤 to see why
@@ -168,7 +225,7 @@ if it doesn't.
 ## App icon
 Save the icon as **`assets/icon.png`** (square, 512×512 or larger). It's
 used for the window and taskbar, next to the name in the header, the Windows
-`.exe` (`build_exe.py` makes `icon.ico`/`icon.icns` from it; needs
+`.exe` (`tools/build_exe.py` makes `icon.ico`/`icon.icns` from it; needs
 `pip install pillow`) and the Android app icon and launch screen.
 
 ## Building Executables
@@ -176,9 +233,9 @@ used for the window and taskbar, next to the name in the header, the Windows
 ### Windows / Linux / macOS — Single EXE
 ```bash
 pip install pyinstaller
-python build_exe.py              # single .exe (default)
-python build_exe.py --onedir     # folder build (faster startup)
-python build_exe.py --clean      # clean previous build first
+python tools/build_exe.py              # single .exe (default)
+python tools/build_exe.py --onedir     # folder build (faster startup)
+python tools/build_exe.py --clean      # clean previous build first
 ```
 Output: `dist/Prometheus.exe` (~150–300MB, self-contained).
 Knowledge base, voices, and memory sit alongside the exe — not bundled inside —
@@ -198,15 +255,15 @@ fetched by the deploy tool if you don't give them.
 
 ```bash
 # Linux or macOS (on Windows use WSL2)
-python build_apk.py --setup                        # first time only
-python build_apk.py --debug --wheels ~/qtwheels    # folder with both wheels
-python build_apk.py --install                      # push to a phone via ADB
+python tools/build_apk.py --setup                        # first time only
+python tools/build_apk.py --debug --wheels ~/qtwheels    # folder with both wheels
+python tools/build_apk.py --install                      # push to a phone via ADB
 
 # Emulator instead of a real phone:
-python build_apk.py --debug --wheels ~/qtwheels --arch x86_64
+python tools/build_apk.py --debug --wheels ~/qtwheels --arch x86_64
 
 # Build on GitHub instead (free):
-python build_apk.py --github   # writes .github/workflows/build_apk.yml
+python tools/build_apk.py --github   # writes .github/workflows/build_apk.yml
 ```
 Without `--wheels`, it looks in `./wheels`, `~/wheels`, `~/qtwheels`,
 `~/Downloads` and `~/.pyside6_android_deploy`.
@@ -225,7 +282,7 @@ Voice (Piper, Faster-Whisper) is desktop-only for now.
 
 ### The big one: 1 million English articles (recommended)
 ```bash
-python ingest.py --download-wikipedia-full
+python tools/ingest.py --download-wikipedia-full
 ```
 - Downloads the full English Wikipedia once (about 24 GB, into
   `prometheus_setup/`; resumes if cut off, checked against Wikimedia's checksum).
@@ -241,8 +298,8 @@ python ingest.py --download-wikipedia-full
 - Afterwards the 24 GB download can be deleted.
 
 ```bash
-python ingest.py --download-wikipedia-full --top 500000      # a smaller one (~5 GB)
-python ingest.py --wikipedia-full path/to/enwiki-…-multistream.xml.bz2   # a dump you already have
+python tools/ingest.py --download-wikipedia-full --top 500000      # a smaller one (~5 GB)
+python tools/ingest.py --wikipedia-full path/to/enwiki-…-multistream.xml.bz2   # a dump you already have
 ```
 When it's there, chat, the librarian and the Wikipedia section use it instead
 of the Simple English files.
@@ -254,8 +311,8 @@ https://dumps.wikimedia.org/simplewiki/latest/ (or let Prometheus fetch it),
 keep it in `prometheus_setup/`, then **extract** it — a few minutes:
 
 ```bash
-python ingest.py --wikipedia prometheus_setup/simplewiki-latest-pages-articles.xml.bz2 --extract-only
-python ingest.py --download-wikipedia --extract-only     # same, downloading it for you
+python tools/ingest.py --wikipedia prometheus_setup/simplewiki-latest-pages-articles.xml.bz2 --extract-only
+python tools/ingest.py --download-wikipedia --extract-only     # same, downloading it for you
 ```
 
 That also builds the **search index** for the Wikipedia tab (SQLite full-text
@@ -263,10 +320,10 @@ search, built in — a minute or two, no AI model), so every article's text is
 searchable straight away. For articles you extracted before this existed:
 
 ```bash
-python ingest.py --wiki-index
+python tools/ingest.py --wiki-index
 ```
 
-Indexing for the AI library search as well (`python ingest.py --source
+Indexing for the AI library search as well (`python tools/ingest.py --source
 wikipedia`) is optional and takes hours on a CPU. Re-running the extract with a newer dump only
 rewrites changed articles and removes deleted ones.
 
@@ -291,7 +348,7 @@ Read whole articles, and **Ask about this** to talk about one in the chat tab.
 
 ## Knowledge Sources
 
-`bootstrap.py` downloads all of these automatically. All are public domain or explicitly free to reproduce.
+`tools/bootstrap.py` downloads all of these automatically. All are public domain or explicitly free to reproduce.
 
 ### Tier 1 — Critical (Downloaded Automatically)
 | Source | Domain Folder | License |
@@ -495,10 +552,10 @@ whatever you choose.
 ### Sources and pictures
 Under each library answer: **From:** the book and page it drew on, and the
 page itself as a picture (click for full size). Pages are rendered by
-`ingest.py` for PDFs in the medical, plant, survival, build, electronics,
-navigation and farming folders — re-run `python ingest.py` after adding PDFs.
+`tools/ingest.py` for PDFs in the medical, plant, survival, build, electronics,
+navigation and farming folders — re-run `python tools/ingest.py` after adding PDFs.
 PDFs indexed before their folder had pictures are redone once, automatically,
-on the next `python ingest.py` (you'll see "↻ adding page pictures").
+on the next `python tools/ingest.py` (you'll see "↻ adding page pictures").
 
 ### Follow-up questions
 "why?", "yes but why", "are you sure?" and other short follow-ups keep the
@@ -565,7 +622,7 @@ Survival section also offers the optional 5-question **Situation check**.
 | **☰** | Show or hide the menu (phone: opens it full-screen; pick a section or chat to go back) |
 | **Situation check** | 5 questions → a numbered priority list |
 | **Skills** | Civilisation rebuild tracker (55 skills, 8 stages) |
-| **Map** | Offline world map (run `bootstrap_map.py` for map data) |
+| **Map** | Offline world map (run `tools/bootstrap_map.py` for map data) |
 | **Info** | Show or hide your situation panel. It starts hidden until there's something in it |
 | **Settings** | You (what it knows about you), assistant and voice, models, voice input, Obsidian |
 | **More ▾** | Personal documents · Print emergency reference · Reset · Developer panel (Ctrl+D) |
@@ -581,9 +638,9 @@ before.
 
 | Command | Does |
 |---------|------|
-| `python -m core.ollama_local --move` | Move the models Settings uses from Ollama's usual folder into `prometheus/models` |
-| `python -m core.ollama_local --pull <name>` | Download a model straight into `prometheus/models` |
-| `python -m core.ollama_local --list` | What's in `prometheus/models` |
+| `python -m core.ai.ollama_local --move` | Move the models Settings uses from Ollama's usual folder into `prometheus/models` |
+| `python -m core.ai.ollama_local --pull <name>` | Download a model straight into `prometheus/models` |
+| `python -m core.ai.ollama_local --list` | What's in `prometheus/models` |
 
 If `--move` says the old copy is still in use, quit Ollama (tray icon → Quit)
 and run it again to free the space.
@@ -617,7 +674,7 @@ speaker reads the passages itself, as before.
 ### Choosing the models
 Settings → Model has a box for the **speaker** and one for the **librarian**,
 listing the models installed in Ollama (get one with
-`python -m core.ollama_local --pull <name>`). Untick **Use the librarian** to go
+`python -m core.ai.ollama_local --pull <name>`). Untick **Use the librarian** to go
 back to one model reading the library itself. **Check Ollama** tests the
 address you've typed. Changes apply as soon as you save; no restart needed.
 `setup.bat` / `setup.sh` download both (about 2.1 GB together).
@@ -722,21 +779,21 @@ For a go-bag device, add a small e-ink or sunlight-readable screen.
 ## Ingest Reference
 
 ```bash
-python ingest.py                                  # index all new files
-python ingest.py --rebuild                        # clear and reindex everything
-python ingest.py --source medical                 # one domain only
-python ingest.py --stats                          # knowledge base statistics
-python ingest.py --wikipedia FILE.xml.bz2         # ingest Wikipedia XML dump
-python ingest.py --wikipedia FILE.xml.bz2 --max-articles 50000
-python ingest.py --init                           # create folder structure only
+python tools/ingest.py                                  # index all new files
+python tools/ingest.py --rebuild                        # clear and reindex everything
+python tools/ingest.py --source medical                 # one domain only
+python tools/ingest.py --stats                          # knowledge base statistics
+python tools/ingest.py --wikipedia FILE.xml.bz2         # ingest Wikipedia XML dump
+python tools/ingest.py --wikipedia FILE.xml.bz2 --max-articles 50000
+python tools/ingest.py --init                           # create folder structure only
 ```
 
-**Upgrading from v19 or earlier:** run `python ingest.py` once. It indexes the new
+**Upgrading from v19 or earlier:** run `python tools/ingest.py` once. It indexes the new
 `scientific_reference/` folder (needed by the Training Path) and, with the v22
 cleaner, keeps formulas intact (`=`, `+`, `×`, `²` used to be stripped). For the
-formula fix to apply to sources indexed earlier, run `python ingest.py --rebuild`.
+formula fix to apply to sources indexed earlier, run `python tools/ingest.py --rebuild`.
 
-Re-running `ingest.py` keeps the index matching the folder:
+Re-running `tools/ingest.py` keeps the index matching the folder:
 - an edited file's old entries are replaced, not duplicated;
 - a deleted file's entries are removed;
 - the same file under two names (same contents) is indexed once — otherwise one
@@ -751,12 +808,12 @@ Re-running `ingest.py` keeps the index matching the folder:
 prometheus/
 ├── main.py                    # Entry point
 ├── setup.bat / setup.sh       # One-step install (Windows / Linux, macOS, Pi)
-├── bootstrap.py               # One-time downloader (self-deletes after use)
-├── bootstrap_map.py           # Offline map data downloader
-├── ingest.py                  # Knowledge base indexing pipeline
-├── generate_reference.py      # Printable emergency PDF generator
-├── build_exe.py               # EXE builder (Windows/Linux/Mac)
-├── build_apk.py               # APK builder (Android, pyside6-android-deploy)
+├── tools/bootstrap.py               # One-time downloader (self-deletes after use)
+├── tools/bootstrap_map.py           # Offline map data downloader
+├── tools/ingest.py                  # Knowledge base indexing pipeline
+├── tools/generate_reference.py      # Printable emergency PDF generator
+├── tools/build_exe.py               # EXE builder (Windows/Linux/Mac)
+├── tools/build_apk.py               # APK builder (Android, pyside6-android-deploy)
 ├── requirements.txt
 ├── README.md
 ├── CLAUDE.md                  # Working notes for AI-assisted development
@@ -789,7 +846,7 @@ prometheus/
 │   ├── context_manager.py     # Rolling conversation summaries
 │   ├── map_engine.py          # Offline maps, biome and resource context
 │   ├── memory.py              # Persistent user state
-│   ├── p2p.py                 # Local-network messaging (off — core/features.py)
+│   ├── p2p.py                 # Local-network messaging (off — core/app/features.py)
 │   ├── features.py            # Feature switches (P2P_ENABLED = False)
 │   ├── stt.py                 # Faster-Whisper speech-to-text
 │   ├── tabs.py                # Tab definitions and management
@@ -819,7 +876,7 @@ prometheus/
 ├── tests/
 │   └── test_training.py       # python -m unittest discover tests
 │
-├── knowledge_base/            # Populated by bootstrap.py + ingest.py
+├── knowledge_base/            # Populated by tools/bootstrap.py + tools/ingest.py
 │   ├── scientific_reference/  # In the repo — Training Path anchors
 │   ├── [28 more domain folders]
 │   └── wikipedia/             # Optional — populated separately
@@ -850,7 +907,7 @@ folder opens with the file selected, ready to send. `logs/` isn't committed.
 
 ```bash
 python -m unittest discover tests                                  # Training Path
-python -c "from core.eval_harness import EvalHarness; EvalHarness().run_all()"   # decision layers
+python -c "from core.answers.eval_harness import EvalHarness; EvalHarness().run_all()"   # decision layers
 ```
 Both also run from the Dev Panel → Eval. Neither needs Ollama.
 

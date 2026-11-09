@@ -8,12 +8,12 @@ import threading
 import unittest
 from pathlib import Path
 
-from core.intent_router import IntentRouter
+from core.answers.intent_router import IntentRouter
 from core.training.graph import TrainingGraph
 from core.training.engine import DerivationEngine
 from core.training.session import TrainingSession
 from core.training.axiom_seeds import CONCEPTS
-from core.rag import KnowledgeBase
+from core.library.rag import KnowledgeBase
 
 
 GOOD_POWER = """METHOD 1:

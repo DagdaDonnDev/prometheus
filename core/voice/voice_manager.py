@@ -1,0 +1,217 @@
+"""
+Voice Manager
+=============
+Scans voices/ directory for Piper voice models.
+Each subfolder = one character/voice.
+Character name = folder name.
+
+Expected structure:
+    voices/
+        Rocky/
+            en_US-rocky-medium.onnx
+            en_US-rocky-medium.onnx.json
+        Amy/
+            en_US-amy-medium.onnx
+            en_US-amy-medium.onnx.json
+        Alan/
+            en_GB-alan-medium.onnx
+            en_GB-alan-medium.onnx.json
+
+The .onnx.json config file is required by Piper alongside the model.
+Both files must be in the same folder.
+Download voices from: https://huggingface.co/rhasspy/piper-voices
+"""
+
+import subprocess
+import tempfile
+import os
+from pathlib import Path
+from typing import Optional, List, Dict
+from dataclasses import dataclass
+
+
+VOICES_DIR = Path("voices")
+
+
+@dataclass
+class PiperVoice:
+    name: str           # Character name (folder name)
+    model: Path         # .onnx file
+    config: Path        # .onnx.json file
+    folder: Path        # Parent folder
+
+
+class VoiceManager:
+    """
+    Scans voices/ directory and manages all Piper voices.
+    Character name = subfolder name.
+    """
+
+    def __init__(self):
+        self._voices: Dict[str, PiperVoice] = {}
+        self.scan()
+
+    def scan(self):
+        """Scan voices/ directory and detect all Piper voices."""
+        self._voices = {}
+
+        if not VOICES_DIR.exists():
+            VOICES_DIR.mkdir(parents=True, exist_ok=True)
+            return
+
+        for folder in sorted(VOICES_DIR.iterdir()):
+            if not folder.is_dir():
+                continue
+
+            voice = self._detect_piper_voice(folder)
+            if voice:
+                self._voices[folder.name] = voice
+
+    def _detect_piper_voice(self, folder: Path) -> Optional[PiperVoice]:
+        """Find .onnx + .onnx.json pair in a voice folder."""
+        onnx_files = list(folder.glob("*.onnx"))
+
+        # Filter out .onnx.json files — we want only the model
+        model_files = [f for f in onnx_files if not f.name.endswith(".onnx.json")]
+
+        if not model_files:
+            return None
+
+        model = model_files[0]  # Use first .onnx found
+
+        # Look for matching config — same name with .json appended
+        config = Path(str(model) + ".json")
+        if not config.exists():
+            # Try any .json in the folder
+            json_files = list(folder.glob("*.json"))
+            if json_files:
+                config = json_files[0]
+            else:
+                # Piper can sometimes run without config — try anyway
+                config = config  # keep the expected path even if missing
+
+        return PiperVoice(
+            name=folder.name,
+            model=model,
+            config=config,
+            folder=folder,
+        )
+
+    # ── Public API ─────────────────────────────────────────────────────────
+
+    def all_voices(self) -> List[PiperVoice]:
+        """Return all detected voices, sorted by character name."""
+        return sorted(self._voices.values(), key=lambda v: v.name.lower())
+
+    def get(self, name: str) -> Optional[PiperVoice]:
+        """Get a voice by character name."""
+        return self._voices.get(name)
+
+    def names(self) -> List[str]:
+        """Return list of all character names."""
+        return sorted(self._voices.keys())
+
+    def count(self) -> int:
+        return len(self._voices)
+
+    def first(self) -> Optional[PiperVoice]:
+        """Return first available voice (alphabetical)."""
+        voices = self.all_voices()
+        return voices[0] if voices else None
+
+    def speak(
+        self,
+        text: str,
+        voice: PiperVoice,
+        output_path: str,
+        rate: float = 1.0,
+    ) -> bool:
+        """
+        Synthesise text to a wav file using Piper.
+        Returns True on success.
+        """
+        if not text.strip():
+            return False
+
+        piper = self.find_piper()
+        if not piper:
+            return False
+        cmd = [piper, "--model", str(voice.model)]
+
+        if voice.config.exists():
+            cmd += ["--config", str(voice.config)]
+
+        cmd += ["--output_file", output_path]
+
+        # Piper controls speed via sentence silence and length scale
+        # length_scale > 1 = slower, < 1 = faster
+        length_scale = 1.0 / rate  # invert: rate 0.85 → scale 1.18
+        cmd += ["--length_scale", f"{length_scale:.2f}"]
+
+        try:
+            result = subprocess.run(
+                cmd,
+                input=text.encode("utf-8"),
+                capture_output=True,
+                timeout=30,
+            )
+            return result.returncode == 0
+        except FileNotFoundError:
+            return False  # piper binary not found
+        except subprocess.TimeoutExpired:
+            return False
+
+    def find_piper(self) -> Optional[str]:
+        """
+        Locate the Piper program (cached after the first look).
+
+        Step 1: PROMETHEUS_PIPER environment variable, if set
+        Step 2: piper on PATH
+        Step 3: a piper/ folder in the project
+        Step 4: anywhere under prometheus_setup/ (inside or next to the project)
+
+        Only the release program counts (piper.exe on Windows) — the Piper
+        source code (piper-master) can't speak on its own.
+        """
+        if getattr(self, "_piper_cache", None) is not None:
+            return self._piper_cache or None
+
+        import os
+        import shutil
+        import sys
+        from core.app.paths import PROJECT_DIR, setup_dir
+
+        exe = "piper.exe" if sys.platform == "win32" else "piper"
+        found = ""
+
+        env = os.environ.get("PROMETHEUS_PIPER", "")
+        if env and Path(env).is_file():
+            found = env
+        if not found:
+            found = shutil.which("piper") or ""
+        if not found:
+            for base in (PROJECT_DIR / "piper", setup_dir()):
+                if not base.is_dir():
+                    continue
+                for cand in sorted(base.rglob(exe)):
+                    if cand.is_file() and (sys.platform == "win32" or os.access(cand, os.X_OK)):
+                        found = str(cand)
+                        break
+                if found:
+                    break
+
+        self._piper_cache = found
+        return found or None
+
+    def piper_available(self) -> bool:
+        """True if the Piper program was found."""
+        return self.find_piper() is not None
+
+    def status_summary(self) -> str:
+        """Human-readable status for settings/status bar."""
+        if not self.piper_available():
+            return "Piper not found — run: python tools/setup_voice.py"
+        if not self._voices:
+            return "No voices found — add folders to voices/"
+        names = ", ".join(self.names())
+        return f"{self.count()} voice(s): {names}"
