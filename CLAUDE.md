@@ -67,18 +67,36 @@ Decision layers live in `core/pipeline.py` (`QueryPipeline`, no Qt). The window 
   Playback: `winsound` on Windows (polled so stop works), aplay/paplay/afplay elsewhere;
   `stop()` bumps a generation counter and terminates only our own player process.
 
-## UI (overhauled 2026-11-05)
-- `ui/style.qss` is the single source of look: neutral text, colour only in bars/borders/fills,
-  `QLabel { background: transparent }` (a global QWidget background used to paint black boxes behind
-  labels). Small square buttons need `padding: 0` or the global padding hides their text.
-- Header: PROMETHEUS + day; Situation check, Skills, Map, Info (checkable), Settings, More ▾ menu
-  (documents, print, reset, developer panel). Phone: first three move into More.
+## UI (redesigned 2026-11-09)
+- `ui/style.qss` is the single source of look: navy palette from the icon (#11131a window, #1d212c card,
+  #2b3040 border), neutral text, amber #f0a500 only in bars/borders/fills.
+  `QLabel { background: transparent }`. Small square buttons need `padding: 0`.
+- Layout: header (☰ `_chats_btn` → `_toggle_chats`, logo, name, day; Situation check, Skills, Map,
+  Info, Settings, More ▾) / splitter: `NavPanel` (ui/nav_panel.py: Quick help, Sections list, then the
+  embedded ChatsPanel) | `_chat_pane` (ChatView + InputBar) | Sidebar. Wiki/Review widgets are
+  inserted at splitter index 1 and hide `_chat_pane`. `self.tab_bar` IS the NavPanel (same API as the
+  old TabBar: set_active/set_label/refresh/_buttons; ui/tab_bar.py deleted).
+- Phone: ☰ swaps the whole screen to the menu; picking a section/chat closes it. Day label hidden.
+- Chat: centred column (max 820), user = `#bubble_user` rounded fill right-aligned, `fit_width()` so
+  short messages aren't clipped; assistant = plain text. Composer `#composer` (rounded box, mic + send).
 - Companion tab is first and the default. No first-launch popup: empty tabs show `ui/welcome.py`
   (intro + suggestions); only Survival offers the situation check, until `user.assessment_done`.
 - Sidebar starts hidden until memory has something (`_has_situation_data`).
 - Ollama: `OllamaCheckWorker` (QThread) — never check on the UI thread; retries every 10 s;
-  `is_available()` falls back from localhost to 127.0.0.1. Settings → Model edits `fast_model` and
-  `companion_model` (chats use these; `llm_model` mirrors fast_model; old configs migrate in `Config.load`).
+  `is_available()` falls back from localhost to 127.0.0.1.
+
+## Two models (2026-11-09) — core/librarian.py
+- `config.speaker_model` (qwen3:1.7b; `model_for_tab` → it, every tab) talks; `config.librarian_model`
+  (LFM2.5) only extracts; `two_models` toggle. `_thinking_off(model)` sends `think: false` only to
+  qwen3/deepseek-r1/qwq/magistral (Ollama rejects it for others); `strip_thinking` + stream filter.
+- Knowledge tabs: `Librarian.brief` (speaker, ≤60 tokens: SEARCH/QUESTION lines, gets the last
+  exchange) → search with brief.search + old search_q → `extract(question, passages)` (librarian,
+  passages cut to 380 words total, ≤8 "- fact [n]" lines or NOT FOUND) → `facts_block` replaces
+  knowledge_context. Emergency: no brief, no extraction (raw passages). Crisis: CRISIS_PROMPT only.
+- Companion: no brief; wiki (250 words)/own notes/companion shelf → passages → extract → facts_block.
+  `Facts.failed` (no answer at all) → fall back to raw passages, never "nothing found".
+- `prepare_knowledge(..., progress)` runs in `ui/workers.PrepareWorker` (QThread); results guarded
+  by `_generation_id`; `_answer_prepared` continues on the UI thread. Trace: brief_ms, librarian_ms.
 
 ## Chat tab, speed, crisis (2026-11-05, owner uses LFM2.5-1.2B-Instruct)
 - Companion = `pipeline._prepare_companion`: COMPANION_PERSONALITY (friend, length follows mood,
@@ -89,6 +107,10 @@ Decision layers live in `core/pipeline.py` (`QueryPipeline`, no Qt). The window 
   `warm_up()` runs once Ollama is ready. `llm.last_stats` → trace (load / prompt tokens / eval ms).
 - Crisis: `intent_router.is_crisis` (suicide/self-harm wording) → `RoutingPlan.is_crisis` →
   `CRISIS_PROMPT`, any tab. Bare "help" is NOT an emergency (only "please help", "help!" …).
+- main.py MUST use `Config.load()` (it used `Config()` — nothing in Settings survived a restart).
+- Per-voice profiles: `config.voice_profiles {voice: {name, persona}}`; `use_voice()` makes one active
+  (copies into assistant_name/persona, which everything reads); `store_profile()`. Settings →
+  Assistant: Voice combo on top, name + personality swap with it. Old single persona migrates in load().
 - Assistant name/persona: `config.assistant_name/assistant_persona`; `pipeline._tab_system` swaps
   "You are Prometheus"; header + companion tab label follow it.
 - P2P/Messages hidden: `core/features.P2P_ENABLED = False` (no tab, no sockets).
@@ -121,9 +143,26 @@ Decision layers live in `core/pipeline.py` (`QueryPipeline`, no Qt). The window 
 - Wikipedia tab = tab 2 (`id="wikipedia"`, not a chat): `ui/wiki_search.py`, search on a QThread,
   title ranking + vector matches when indexed; "Ask about this" → chat tab "Tell me about <title>".
 
+## Full English Wikipedia (2026-11-09) — core/wiki_full.py
+- `ingest.py --download-wikipedia-full [--top N] [--workers N]` / `--wikipedia-full DUMP`:
+  enwiki multistream dump + index (download_wikipedia generalised: dump_name/sums_name; checksum
+  matched on the part after the date). Jobs = 50 bz2 streams each; multiprocessing (spawn on Windows).
+- Pass 1 `_scan`: link targets → blake2b 64-bit → two 2^26 uint32 count-min tables (512 MB), workers
+  pre-aggregate with np.unique; redirect counts added to targets; top N by score (disambig excluded).
+  Saved as `<db>.chosen.npy`. Pass 2 `_extract`: chosen pages → `core/wikitext.clean_wikitext(cut_tail,
+  max_words=5000)`; each finished piece in `done_jobs` (resume). Then aliases (titles + redirects to
+  kept pages), FTS5 `articles` external-content over `pages` (same columns wiki_index.search reads),
+  `.building` → final. Measured ~17 MB/s/core of wikitext here → est. 2–3 h for ~100 GB on 6–8 cores.
+- `wiki_lookup`: `FULL_DB` exists → `_titles()` returns `_DbTitles` (SQLite-backed mapping, thread-safe
+  lock, aliases→target); `_DbArticle` mimics Path (.stem/.open/.read_text, str = "wikidb:<key>",
+  `read_article` resolves it). `search()` uses `keys_starting` + FTS on the DB.
+- `core/wikitext.title_key` = file-stem rules lower-cased; shared by builder + lookup.
+- APK excludes knowledge_base/*.sqlite etc. Sandbox can't reach dumps.wikimedia.org; tested on
+  generated multistream dumps (tests/test_wiki_full.py).
+
 ## Chat behaviour (2026-11-06)
-- Default model in code: `config.DEFAULT_MODEL` = hf.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF:latest
-  (setup.bat/.sh pull it). The owner's real log after the localhost fix: speak-start 100–500 ms.
+- Librarian default `config.DEFAULT_MODEL` = hf.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF:latest; speaker
+  `DEFAULT_SPEAKER` = qwen3:1.7b (setup.bat/.sh pull both). The owner's real log after the localhost fix: speak-start 100–500 ms.
 - Tone: `core/tone.detect_tone(text, previous)` → annoyed/low/excited/curious/neutral → one
   "Right now: …" line LAST in the companion prompt + intent `chat_<tone>` → INTENT_TEMPERATURE.
   The model can't read tone itself (owner: "too friendly, like an actor").
@@ -146,12 +185,16 @@ Decision layers live in `core/pipeline.py` (`QueryPipeline`, no Qt). The window 
   Button checked state uses `not isHidden()` (isVisibleTo is wrong before the window is shown).
 - `clear_tab(id)` empties the open chat; `every_chat=True` also drops saved chats.
 
-## Profile (2026-11-06)
-- `core/profile.learn(text, memory)` — regex only, on every user message (`_on_send`), errs toward
-  nothing. Writes `user.name/location_estimate/work/mentioned_people ("Kate (sister)")/likes/
-  dislikes/known_skills`. Returned notes → status bar after the reply ("Remembered: …").
-- Companion prompt adds `about_line` (≤55 words) + `earlier_topics(tab)` (last 3 chat TITLES only).
-  Tone line stays last. Settings → You edits every field (empty box clears it).
+## Profile + claims (2026-11-09)
+- `core/profile.extract(text)` → `claims.Claim(field, value, note, utterance, confidence)` (regex only,
+  errs toward nothing). `profile.learn()` = `claims.stage(extract(text), memory)` — NEVER writes memory.
+- `core/claims.py` (memory/claims.sqlite): pending → `accept(id, memory, edited_value)` (writes
+  memory.user + `verified` row with verified_by_user=1 and the utterance) / `reject(id)` (`rejected`,
+  never re-staged). Already-in-profile, pending, verified or rejected values aren't staged again.
+- Review tab: `Tab(id="review")` (last in DEFAULT_TABS, not a chat) → `ui/review_panel.ReviewPanel`
+  cards; `MainWindow._on_review_changed` sets "Review (n)" via `TabBar.set_label`.
+- Companion prompt: `about_line` (memory only = verified) + `earlier_topics(tab)` (last 3 chat TITLES).
+  Settings → You and Obsidian Me edits write memory directly (they are the verification).
 
 ## Obsidian (2026-11-06) — core/obsidian.py, no Qt
 - `config.obsidian_vault/obsidian_use_notes`; `obsidian.set_vault()` at startup + after Settings.

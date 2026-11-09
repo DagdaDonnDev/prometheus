@@ -60,7 +60,7 @@ def main():
             pass
 
     # Load config
-    config = Config()
+    config = Config.load()      # what was chosen in Settings last time
 
     # Apply global stylesheet
     app.setStyleSheet(load_stylesheet())

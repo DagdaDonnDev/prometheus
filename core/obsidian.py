@@ -442,7 +442,7 @@ def sync(memory, tab_manager, assistant: str = "Prometheus") -> str:
         changed = read_back_me(memory, state)
 
         # Step 2
-        tabs = [t for t in tab_manager.tabs if t.id != "wikipedia" and hasattr(t, "all_chats")]
+        tabs = [t for t in tab_manager.tabs if t.id not in ("wikipedia", "review") and hasattr(t, "all_chats")]
         files: Dict[str, str] = {}
         topic_uses: Dict[str, List[Tuple[str, str]]] = {}
         for tab in tabs:

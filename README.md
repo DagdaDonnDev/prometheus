@@ -221,7 +221,33 @@ Voice (Piper, Faster-Whisper) is desktop-only for now.
 
 ---
 
-## Wikipedia (Optional — Simple English, ~360MB download)
+## Wikipedia (Optional)
+
+### The big one: 1 million English articles (recommended)
+```bash
+python ingest.py --download-wikipedia-full
+```
+- Downloads the full English Wikipedia once (about 24 GB, into
+  `prometheus_setup/`; resumes if cut off, checked against Wikimedia's checksum).
+- Keeps the **1,000,000 most linked-to articles** — the things people actually
+  know about, from Titanfall 2 and BT-7274 to every country, film and band you'd
+  ask about. Disambiguation pages, talk pages and "References/See also"
+  sections are left out; very long articles are kept to 5,000 words.
+- Redirects become other names for the article: "BT-7274" finds *Titanfall 2*.
+- Everything goes into one file, `knowledge_base/wikipedia_full.sqlite`
+  (roughly 10 GB), with full-text search built in.
+- Takes a few hours, once, using every CPU core but one. **You can stop it
+  and run the same command again — it carries on where it stopped.**
+- Afterwards the 24 GB download can be deleted.
+
+```bash
+python ingest.py --download-wikipedia-full --top 500000      # a smaller one (~5 GB)
+python ingest.py --wikipedia-full path/to/enwiki-…-multistream.xml.bz2   # a dump you already have
+```
+When it's there, chat, the librarian and the Wikipedia section use it instead
+of the Simple English files.
+
+### The small one: Simple English (~360 MB download)
 
 Download `simplewiki-latest-pages-articles.xml.bz2` from
 https://dumps.wikimedia.org/simplewiki/latest/ (or let Prometheus fetch it),
@@ -393,16 +419,26 @@ That holds through follow-ups that don't repeat the name ("go into the lore",
 "tell me more", "their missions") until you change the subject. When it does
 have an article, it's told that's all it has, and to say so rather than fill in.
 
-### What it remembers about you
-When you mention something about yourself — "my sister Kate", "my dog is
-called Max", "I live in Cork", "I work as a nurse", "I love hiking", "I hate
-mornings", "my favourite film is Inception", "I know how to tie knots" — it's
-noted, and the status bar says what (**Remembered: Kate is your sister**).
-It only picks up plain statements like these; it never guesses.
-The chat tab uses this to talk to you as someone it knows, and knows the
-topics of your last few chats in that tab (titles only, so a new chat still
-starts fresh). See and fix all of it in **Settings → You** (work, people and
-pets, likes, dislikes, notes) or in Obsidian's `Me` note (below).
+### What it remembers about you — only what you confirm
+When you mention something about yourself ("my sister Kate", "my dog is
+called Max", "I live in Cork", "I work as a nurse", "I love hiking", "my
+favourite film is Inception"), it **doesn't use it yet**. It goes to the
+**Review** tab, which shows a count ("Review (2)"):
+
+| On each card | |
+|---|---|
+| What it understood | "Kate is your sister" — and how sure it is |
+| Your words | "You said: my sister Kate is visiting…" |
+| **Accept** | It's added to what it knows about you, marked as confirmed by you, with your words kept as the source |
+| **Edit** | Fix it ("Katie", not "Kate"), then save — saved as confirmed |
+| **Reject** | Never used, and never raised again |
+
+Nothing waiting for review is ever shown to a model. It only picks up plain
+statements like these; it never guesses. Confirmed facts let the chat tab
+talk to you as someone it knows, and it knows the topics of your last few
+chats in that tab (titles only, so a new chat still starts fresh). You can
+also see and change everything in **Settings → You**, or in Obsidian's `Me`
+note (below) — your own edits there count as confirmed.
 
 ### Obsidian — a map of you, and your notes as a source
 [Obsidian](https://obsidian.md) is a free notes app that keeps everything as
@@ -449,9 +485,12 @@ Anything about suicide or self-harm, in any tab, switches to a calm, direct
 crisis response that asks whether you're safe and points you to a real person.
 
 ### Settings → Assistant
-Change the assistant's **name** (header, chat tab, and what the model calls
-itself) and its **personality** in plain words, e.g. "a calm old sailor who
-doesn't rush you". The knowledge tabs stay factual whatever you choose.
+Pick a **voice**, then give that voice its own **name** (header, chat tab,
+and what the model calls itself) and **personality** in plain words, e.g. "a
+calm old sailor who doesn't rush you". Each voice keeps its own: switch voices
+and its name and personality come back with it. Everything in Settings is
+kept when you close and reopen Prometheus. Library answers stay factual
+whatever you choose.
 
 ### Sources and pictures
 Under each library answer: **From:** the book and page it drew on, and the
@@ -504,21 +543,31 @@ first words arrive. Each reply shows a small stamp, e.g. `↳ 🔊 420ms  ✓ 18
 | Ctrl+D | Dev Panel |
 
 ### Getting around
-Prometheus opens in the **Prometheus** (companion) tab with the cursor in the
-message box, so you can just start typing. There's no popup on first launch.
+Prometheus opens in the **Prometheus** (companion) section with the cursor in
+the message box, so you can just start typing. There's no popup on first launch.
 
-Every empty tab shows what it's for and a few questions you can tap. The
-Survival tab also offers the optional 5-question **Situation check**.
+**The menu on the left** (☰ in the top corner shows or hides it):
+- **Quick help** at the top: 16 one-tap questions for urgent situations
+- **Sections**: Prometheus (chat), Wikipedia, Survival, Medical, Electronics,
+  Navigate, Farm, Build, Chemistry, and **Review** (things to confirm about
+  you — shows a count when something's waiting). **+** adds your own section.
+- Under them, the open section's **chats**: New chat, search, and the list.
 
-| Control | Function |
+The conversation sits in a centred column: your messages as soft bubbles on
+the right, replies as plain text. The message box underneath holds the mic
+and send buttons.
+
+Every empty section shows what it's for and a few questions you can tap. The
+Survival section also offers the optional 5-question **Situation check**.
+
+| Header button | Function |
 |---------|---------|
-| **Quick help** (tab bar, left) | 16 one-tap questions for urgent situations |
+| **☰** | Show or hide the menu (phone: opens it full-screen; pick a section or chat to go back) |
 | **Situation check** | 5 questions → a numbered priority list |
 | **Skills** | Civilisation rebuild tracker (55 skills, 8 stages) |
 | **Map** | Offline world map (run `bootstrap_map.py` for map data) |
-| **Chats** | Show or hide this tab's chats (new, search, switch) on the left |
 | **Info** | Show or hide your situation panel. It starts hidden until there's something in it |
-| **Settings** | You (what it knows about you), assistant, model, voice, Obsidian |
+| **Settings** | You (what it knows about you), assistant and voice, models, voice input, Obsidian |
 | **More ▾** | Personal documents · Print emergency reference · Reset · Developer panel (Ctrl+D) |
 
 On a phone, Situation check, Skills and Map move into **More ▾**.
@@ -539,15 +588,43 @@ before.
 If `--move` says the old copy is still in use, quit Ollama (tray icon → Quit)
 and run it again to free the space.
 
-### Choosing the model
-Settings → Model has one box for the knowledge tabs and one for the companion
-tab. Each lists the models installed in Ollama, and you can type any other name
-(get it first with `python -m core.ollama_local --pull <name>`). **Check Ollama** tests the address
-you've typed. Changes apply as soon as you save; no restart needed.
+### Two models: a speaker and a librarian
+Prometheus runs two models side by side:
+
+| | Model | Job |
+|---|---|---|
+| **Speaker** | Qwen3 1.7B (thinking off) | The only one that talks to you. Turns your message into a clear request for the librarian, then answers you in its persona |
+| **Librarian** | LFM2.5 1.2B | Never talks to you. Reads the library passages and lists only the facts in them that answer the request — or says it found nothing |
+
+A question that needs the library goes:
+1. the speaker writes the librarian a request: search words plus the full
+   question (so "their missions" becomes "What missions do the Titans in
+   Titanfall 2 carry out?")
+2. the library is searched with those words
+3. the librarian lists the facts the passages support, with numbers, doses
+   and steps copied exactly, or NOT FOUND
+4. the speaker answers in its own voice using only those facts — if nothing
+   was found, it says it doesn't have it
+
+Small talk skips all of this, so it's as quick as before. Emergencies skip
+step 1 and the speaker reads the field-manual passages word for word. A
+looked-up answer takes roughly half a second to a second longer; the chat
+stamp shows where the time went ("request 300 ms, librarian 450 ms").
+
+If the librarian can't be reached (Ollama down, model not downloaded), the
+speaker reads the passages itself, as before.
+
+### Choosing the models
+Settings → Model has a box for the **speaker** and one for the **librarian**,
+listing the models installed in Ollama (get one with
+`python -m core.ollama_local --pull <name>`). Untick **Use the librarian** to go
+back to one model reading the library itself. **Check Ollama** tests the
+address you've typed. Changes apply as soon as you save; no restart needed.
+`setup.bat` / `setup.sh` download both (about 2.1 GB together).
 
 If Ollama isn't reachable, the status bar says so in plain words and checks
 again every 10 seconds, so starting Ollama after Prometheus is fine. If a model
-isn't installed, it shows the exact `ollama pull` command to run.
+isn't installed, it shows the exact command to get it.
 
 ### Quick Access Panel
 16 pre-wired critical actions across 4 sections. Tap any button — it navigates

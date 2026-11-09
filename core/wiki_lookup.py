@@ -51,6 +51,90 @@ LEAD_IN_PAIRS = {("what", "is"), ("what", "was"), ("who", "is"), ("who", "was"),
 
 _cache: Dict[str, object] = {"mtime": None, "titles": {}}
 
+# The full English build (core/wiki_full.py) — used instead of the extracted
+# Simple English files when it exists
+FULL_DB = WIKI_DIR.parent / "wikipedia_full.sqlite"
+
+
+class _DbArticle:
+    """
+    An article in the full English database, shaped like the Path of an
+    extracted file (.stem, .open(), .read_text()) so everything that reads
+    articles works unchanged. str() is "wikidb:<key>" — read_article() knows it.
+    """
+
+    def __init__(self, titles, key: str):
+        self._titles, self.key = titles, key
+        self.stem = key
+
+    def _text(self) -> str:
+        row = self._titles.row(self.key)
+        return f"# {row[0]}\n\n{row[1]}" if row else ""
+
+    def read_text(self, *a, **k) -> str:
+        return self._text()
+
+    def open(self, *a, **k):
+        import io
+        return io.StringIO(self._text())
+
+    def __str__(self):
+        return f"wikidb:{self.key}"
+
+    __fspath__ = __str__
+
+
+class _DbTitles:
+    """
+    {title key: article} backed by SQLite — a million titles aren't loaded
+    into memory; each lookup is one indexed query (tens of microseconds).
+    A redirect ("bt-7274") finds its article ("titanfall_2").
+    """
+
+    def __init__(self, path: Path):
+        import sqlite3
+        import threading
+        self.path = path
+        self._db = sqlite3.connect(f"file:{path}?mode=ro", uri=True, check_same_thread=False)
+        self._lock = threading.Lock()
+        self._count = None
+
+    def _target(self, key: str):
+        with self._lock:
+            r = self._db.execute("SELECT target FROM aliases WHERE key=?", (key,)).fetchone()
+        return r[0] if r else None
+
+    def __contains__(self, key) -> bool:
+        return self._target(key) is not None
+
+    def __getitem__(self, key) -> "_DbArticle":
+        target = self._target(key)
+        if target is None:
+            raise KeyError(key)
+        return _DbArticle(self, target)
+
+    def get(self, key, default=None):
+        target = self._target(key)
+        return _DbArticle(self, target) if target else default
+
+    def row(self, key: str):
+        with self._lock:
+            return self._db.execute("SELECT title, body FROM pages WHERE key=?", (key,)).fetchone()
+
+    def __len__(self) -> int:
+        if self._count is None:
+            with self._lock:
+                r = self._db.execute("SELECT v FROM meta WHERE k='articles'").fetchone()
+                self._count = int(r[0]) if r else self._db.execute("SELECT COUNT(*) FROM pages").fetchone()[0]
+        return self._count
+
+    def keys_starting(self, prefix: str, limit: int = 30):
+        """Title keys that start with prefix (shortest first) — for the Wikipedia tab."""
+        with self._lock:
+            rows = self._db.execute("SELECT key, target FROM aliases WHERE key >= ? AND key < ? "
+                                    "ORDER BY length(key) LIMIT ?", (prefix, prefix + "\uffff", limit)).fetchall()
+        return rows
+
 
 def _is_disambiguation(path: Path) -> bool:
     """'X may refer to: …' pages list meanings — the real article is a variant."""
@@ -62,8 +146,19 @@ def _is_disambiguation(path: Path) -> bool:
     return "may refer to" in head or "can refer to" in head or "may mean" in head
 
 
-def _titles() -> Dict[str, Path]:
-    """{lower-case file stem: path} for every extracted article (cached)."""
+def _titles():
+    """
+    {lower-case title key: article} — the full English database if it's been
+    built, otherwise every extracted Simple English file (cached).
+    """
+    if FULL_DB.exists():
+        if not isinstance(_cache.get("db"), _DbTitles) or _cache["db"].path != FULL_DB:
+            try:
+                _cache["db"] = _DbTitles(FULL_DB)
+            except Exception:
+                _cache["db"] = None
+        if _cache.get("db") is not None:
+            return _cache["db"]
     if not WIKI_DIR.is_dir():
         return {}
     mtime = WIKI_DIR.stat().st_mtime
@@ -177,9 +272,13 @@ def search(query: str, limit: int = 30, knowledge=None) -> List[Dict]:
     key = "_".join(words)
     want = set(w for w in words if w not in _STOP) or set(words)
 
-    # Step 1
+    # Step 1 (the full database: exact and starts-with titles by query, not a scan)
     scored = []
-    for stem, path in titles.items():
+    if isinstance(titles, _DbTitles):
+        for k, target in titles.keys_starting(key, limit):
+            s = 100 if k == key else 80 - min(20, len(k) - len(key)) / 2
+            scored.append((s, target, titles[target]))
+    for stem, path in ([] if isinstance(titles, _DbTitles) else titles.items()):
         if stem == key:
             s = 100
         elif stem.startswith(key):
@@ -195,7 +294,7 @@ def search(query: str, limit: int = 30, knowledge=None) -> List[Dict]:
 
     # Step 2
     from core import wiki_index
-    index_path = WIKI_DIR.parent / "wikipedia_search.sqlite"
+    index_path = FULL_DB if isinstance(titles, _DbTitles) else WIKI_DIR.parent / "wikipedia_search.sqlite"
     text_hits = wiki_index.search(query, limit=limit, index_path=index_path)
     snippets: Dict[str, str] = {}
     if text_hits:
@@ -236,11 +335,19 @@ def search(query: str, limit: int = 30, knowledge=None) -> List[Dict]:
 
 def full_text_ready() -> bool:
     """True once the inside-the-articles search index has been built."""
+    if FULL_DB.exists():
+        return True
     p = WIKI_DIR.parent / "wikipedia_search.sqlite"
     return p.exists() and p.stat().st_size > 0
 
 
-def read_article(path: Path) -> str:
+def read_article(path) -> str:
+    """An article's text — a file path, a database article, or "wikidb:<key>"."""
+    if str(path).replace("\\", "/").split("/")[-1].startswith("wikidb:"):
+        titles = _titles()
+        key = str(path).replace("\\", "/").split("/")[-1][len("wikidb:"):]
+        art = titles.get(key) if isinstance(titles, _DbTitles) else None
+        return art.read_text() if art else ""
     try:
         return path.read_text(encoding="utf-8", errors="replace")
     except OSError:

@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from core.intent_router import IntentRouter, RoutingPlan
+from core.librarian import facts_block
 from core.sufficiency_gate import SourceSufficiencyGate
 from core.contradiction import ContradictionDetector
 from core.decision_gate import DecisionGate, ResponseMode
@@ -72,6 +73,12 @@ def previous_question(tab, current: str) -> str:
     return users[-1] if users else ""
 
 
+def last_reply(tab) -> str:
+    """The assistant's last reply in the tab, or ""."""
+    replies = [m["content"] for m in getattr(tab, "history", []) if m.get("role") == "assistant"]
+    return replies[-1] if replies else ""
+
+
 def is_follow_up(text: str) -> bool:
     q = text.lower().strip(" ?!.")
     return len(q.split()) <= 6 and (q.startswith(FOLLOW_UP_STARTS) or q in ("why", "how", "source"))
@@ -114,6 +121,8 @@ class QueryPipeline:
         self.contradiction = ContradictionDetector()
         self.gate          = DecisionGate()
         self.mem_filter    = MemoryRelevanceFilter()
+        from core.librarian import Librarian
+        self.librarian     = Librarian(llm)
 
     # ── Step 1 ─────────────────────────────────────────────────────────────
 
@@ -142,7 +151,13 @@ class QueryPipeline:
     # ── Steps 2–10 ─────────────────────────────────────────────────────────
 
     def prepare_knowledge(self, tab, user_input: str,
-                          routing_plan: RoutingPlan, trace=None) -> PreparedAnswer:
+                          routing_plan: RoutingPlan, trace=None, progress=None) -> PreparedAnswer:
+        """
+        Everything before the speaker starts talking. With two models this
+        makes up to two short model calls (the brief, the librarian), so the
+        window runs it on a background thread; progress(text) reports
+        "Checking the library…" while it works.
+        """
 
         # Crisis wording → crisis response, in any tab
         if routing_plan.is_crisis:
@@ -151,7 +166,8 @@ class QueryPipeline:
         # Companion tab: a short friend-like prompt instead of the knowledge
         # pipeline (emergencies still go the full way below)
         if tab.id == "prometheus" and routing_plan.intent != Intent.EMERGENCY:
-            return self._prepare_companion(user_input, routing_plan, trace, tab=tab)
+            return self._prepare_companion(user_input, routing_plan, trace, tab=tab,
+                                           progress=progress)
 
         # Step 2: tiered retrieval. A short follow-up ("yes but why") has nothing
         # to search for on its own — search with the previous question too, so
@@ -159,6 +175,21 @@ class QueryPipeline:
         follow_up = is_follow_up(user_input) and bool(previous_question(tab, user_input))
         search_q = (f"{previous_question(tab, user_input)} {user_input}"
                     if follow_up else user_input)
+        # Two models: the speaker writes the librarian a clear request first —
+        # search words and the full question ("their missions" → which missions).
+        # Not in an emergency: there the message is searched as written, and the
+        # speaker reads the field-manual passages itself, word for word.
+        use_librarian = self.librarian.enabled() and routing_plan.intent != Intent.EMERGENCY
+        question = user_input
+        if use_librarian:
+            if progress:
+                progress("Checking the library")
+            brief = self.librarian.brief(user_input, previous_question(tab, user_input),
+                                         last_reply(tab))
+            search_q = f"{brief.search} {search_q}"
+            question = brief.question
+            if trace:
+                trace.brief_ms = brief.ms
         knowledge_context, confidence_note = self.knowledge.search(
             query=search_q, routing_plan=routing_plan,
         )
@@ -242,6 +273,21 @@ class QueryPipeline:
                 if missing:
                     knowledge_context = (knowledge_context + "\n\n" if knowledge_context else "") + missing
 
+        # Step 7c: the librarian reads the passages and keeps only the facts
+        # that answer the question; the speaker gets those instead of the
+        # passages, and may state nothing else about it
+        if use_librarian and (raw_chunks or wiki_sources):
+            passages = [(self.knowledge.scorer._source_label(r.get("source", ""), r.get("domain", "")),
+                         r.get("content", ""))
+                        for r in raw_chunks[:max(1, getattr(self.knowledge, "prompt_passages", 3))]]
+            if not routing_plan.is_strict and tab.id != "medical":
+                passages += self._wiki_passages(search_q, 200)
+            facts = self.librarian.extract(question, passages)
+            if trace:
+                trace.librarian_ms = facts.ms
+            if not facts.failed:
+                knowledge_context = facts_block(facts)
+
         # Step 8: system prompt (order matters — guidance last)
         system_prompt = self.llm.build_system_prompt(
             tab_system=self._tab_system(tab),
@@ -312,7 +358,7 @@ class QueryPipeline:
         )
 
     def _prepare_companion(self, user_input: str, routing_plan: RoutingPlan,
-                           trace=None, tab=None) -> PreparedAnswer:
+                           trace=None, tab=None, progress=None) -> PreparedAnswer:
         """
         Friend-like chat. Kept deliberately small: every extra token in the
         prompt is read by the model before its first word (that was ~3 s).
@@ -338,12 +384,19 @@ class QueryPipeline:
             if line:
                 parts.append(line)
 
+        # With two models, anything looked up goes to the librarian first and
+        # only its facts reach this prompt (collected here, read in Step 4b)
+        use_librarian = self.librarian.enabled()
+        passages = []
+
         q = user_input.lower()
         if any(t in q for t in COMPANION_TOPICS):
             from core.confidence import trim_passage
             search = getattr(self.knowledge, "_search_domains", None)
             chunks = search(user_input, ["companion"], 2) if search else []
-            if chunks:
+            if chunks and use_librarian:
+                passages += [("Companion shelf", c["content"]) for c in chunks]
+            elif chunks:
                 notes = "\n\n".join(trim_passage(c["content"], user_input, 90) for c in chunks)
                 parts.append(
                     "Background you can draw on, in your own words, only if it helps:\n" + notes
@@ -355,7 +408,9 @@ class QueryPipeline:
         # Step 3b: a note of theirs (Obsidian) that the message names by title
         from core.obsidian import notes_named_in
         own = notes_named_in(user_input)
-        if own:
+        if own and use_librarian:
+            passages += [(f"Their note — {t}", b) for t, b in own]
+        elif own:
             parts.append("From their own notes (they wrote this):\n" +
                          "\n\n".join(f"{t}: {b}" for t, b in own))
 
@@ -367,15 +422,34 @@ class QueryPipeline:
         carried = subject != user_input
         wiki_notes, sources = self._wikipedia_background(subject)
         sources = [f"Obsidian — {t}" for t, _ in own] + sources
-        if wiki_notes:
+        if wiki_notes and use_librarian:
+            passages += self._wiki_passages(subject, 250)
+        elif wiki_notes:
             parts.append(("Earlier in this chat they asked about this — use it only if they "
                           "still are.\n" if carried else "") + wiki_notes)
-        elif not own:
+        elif not own and not passages:
             missing = self._not_in_library_note(subject)
             if missing and carried:
                 missing = "If they're still on the same subject — " + missing
             if missing:
                 parts.append(missing)
+
+        # Step 4b: the librarian reads what was found and keeps only the facts
+        # that answer them; the speaker may say nothing else about it
+        if passages:
+            if progress:
+                progress("Checking the library")
+            question = (f"{user_input} (about: {subject})" if carried else user_input)
+            facts = self.librarian.extract(question, passages)
+            if trace:
+                trace.librarian_ms = facts.ms
+            if facts.failed:            # librarian unreachable: the speaker reads them itself
+                parts.append("Background from the library — use only this for facts about it:\n" +
+                             "\n\n".join(f"{label}: {' '.join(text.split()[:110])}"
+                                           for label, text in passages))
+            else:
+                parts.append(("If they're still on the same subject — " if carried else "") +
+                             facts_block(facts, "it"))
 
         # Step 5: how to sound right now — read from their message in code,
         # last in the prompt (a small model can't pick tone up on its own)
@@ -445,6 +519,13 @@ class QueryPipeline:
         return (f'NOT IN YOUR LIBRARY: you have nothing about "{thing}" — it isn\'t in your '
                 f'offline database. Say that plainly, e.g. "I don\'t have {thing} in my '
                 f'database." Don\'t guess, and don\'t describe it from memory.')
+
+    @staticmethod
+    def _wiki_passages(text: str, words: int = 250):
+        """[("Wikipedia — Title", opening ~words)] for the articles a message names."""
+        from core.wiki_lookup import find_articles, lead
+        return [(f"Wikipedia — {title}", lead(path, words))
+                for title, path in find_articles(text, max_articles=2)]
 
     @staticmethod
     def _wikipedia_background(user_input: str, words: int = 110):

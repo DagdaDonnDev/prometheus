@@ -16,7 +16,23 @@ class _Mem:
         self.saved += 1
 
 
-class TestLearn(unittest.TestCase):
+class _TempClaims(unittest.TestCase):
+    """Each test gets its own claims database."""
+
+    def setUp(self):
+        import os, tempfile
+        from unittest import mock
+        from core import claims
+        self.tmp = tempfile.TemporaryDirectory()
+        self.p = mock.patch.object(claims, "DB_PATH", os.path.join(self.tmp.name, "claims.sqlite"))
+        self.p.start()
+
+    def tearDown(self):
+        self.p.stop()
+        self.tmp.cleanup()
+
+
+class TestLearn(_TempClaims):
     def test_learns_plain_statements(self):
         m = _Mem()
         cases = {
@@ -32,10 +48,13 @@ class TestLearn(unittest.TestCase):
         }
         for text, note in cases.items():
             self.assertEqual(profile.learn(text, m), [note], text)
-        u = m.data["user"]
-        self.assertIn("Kate (sister)", u["mentioned_people"])
-        self.assertIn("Inception (favourite film)", u["likes"])
-        self.assertTrue(m.saved)
+
+    def test_nothing_reaches_the_profile_before_review(self):
+        m = _Mem()
+        profile.learn("my sister Kate is visiting and I love hiking", m)
+        self.assertEqual(m.data["user"]["mentioned_people"], [])
+        self.assertEqual(m.saved, 0)
+        self.assertEqual(profile.about_line(m), "")
 
     def test_learns_nothing_from_ordinary_talk(self):
         m = _Mem()
@@ -43,7 +62,6 @@ class TestLearn(unittest.TestCase):
                      "I would like to know how to purify water", "my mum is sick",
                      "I like it when you're short", "I'm from the countryside"]:
             self.assertEqual(profile.learn(text, m), [], text)
-        self.assertEqual(m.saved, 0)
 
     def test_no_duplicates(self):
         m = _Mem()
@@ -51,11 +69,14 @@ class TestLearn(unittest.TestCase):
         self.assertEqual(profile.learn("I really love Hiking", m), [])
 
 
-class TestCompanionLines(unittest.TestCase):
-    def test_about_line(self):
+class TestCompanionLines(_TempClaims):
+    def test_about_line_uses_only_accepted_facts(self):
+        from core import claims
         m = _Mem()
         self.assertEqual(profile.about_line(m), "")
         profile.learn("I live in Cork. My sister Kate is great. I love hiking.", m)
+        for c in claims.pending():
+            claims.accept(c.id, m)
         line = profile.about_line(m)
         for bit in ("Cork", "Kate (sister)", "hiking"):
             self.assertIn(bit, line)

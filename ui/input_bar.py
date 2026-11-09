@@ -10,6 +10,7 @@ from PySide6.QtCore import Signal, Qt, QSize
 from PySide6.QtGui import QKeyEvent, QTextCursor, QIcon, QCursor
 
 from core.stt import STTEngine
+from core.platform_info import PHONE_LAYOUT
 
 
 class ExpandingTextEdit(QTextEdit):
@@ -104,11 +105,21 @@ class InputBar(QFrame):
         self._edit_banner.setObjectName("editBanner")
         self._edit_banner.hide()
         outer.addWidget(self._edit_banner)
-        row = QWidget()
-        outer.addWidget(row)
+        # The composer: one rounded box holding the text, the mic and send,
+        # centred under the conversation
+        holder = QHBoxLayout()
+        holder.setContentsMargins(*((8, 6, 8, 8) if PHONE_LAYOUT else (24, 8, 24, 14)))
+        row = QFrame()
+        row.setObjectName("composer")
+        if not PHONE_LAYOUT:
+            row.setMaximumWidth(820)
+        holder.addStretch()
+        holder.addWidget(row, 100)
+        holder.addStretch()
+        outer.addLayout(holder)
         layout = QHBoxLayout(row)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(8)
+        layout.setContentsMargins(10, 6, 6, 6)
+        layout.setSpacing(6)
 
         # Text input
         self._text = ExpandingTextEdit()

@@ -81,6 +81,8 @@ class QueryTrace:
     first_token_ms: int = 0         # speak-start: first token / TTS start (headline)
     # Where the wait comes from (v23)
     prep_ms:        int = 0         # retrieval + gates + prompt building, before the model call
+    brief_ms:       int = 0         # speaker writing the librarian's request
+    librarian_ms:   int = 0         # librarian pulling facts from the passages
     load_ms:        int = 0         # Ollama loading the model into memory (0 when already loaded)
     prompt_tokens:  int = 0         # tokens the model had to read before writing
     prompt_eval_ms: int = 0         # time spent reading them
@@ -89,9 +91,12 @@ class QueryTrace:
 
     def breakdown(self) -> str:
         """One line: where the time to the first word went."""
+        lib = ""
+        if self.brief_ms or self.librarian_ms:
+            lib = f"(request {self.brief_ms} ms, librarian {self.librarian_ms} ms) "
         if not (self.prompt_tokens or self.load_ms):
-            return f"prep {self.prep_ms} ms"
-        return (f"prep {self.prep_ms} ms · model load {self.load_ms} ms · "
+            return f"prep {self.prep_ms} ms {lib}".strip()
+        return (f"prep {self.prep_ms} ms {lib}· model load {self.load_ms} ms · "
                 f"reading prompt {self.prompt_eval_ms} ms ({self.prompt_tokens} tokens) · "
                 f"writing {self.gen_ms} ms ({self.gen_tokens} tokens)")
     llm_model:      str = ""

@@ -53,16 +53,19 @@ if ! command -v ollama >/dev/null 2>&1; then
 fi
 ok "Ollama installed"
 
-# Step 4: model — kept in prometheus/models, not your home folder.
-#   4a: already downloaded into Ollama's usual folder? Move it here.
-#   4b: otherwise download it straight into prometheus/models.
-MODEL="hf.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF:latest"
+# Step 4: models — kept in prometheus/models, not your home folder.
+#   speaker   qwen3:1.7b  — talks to you            (about 1.4 GB)
+#   librarian LFM2.5 1.2B — reads the library only  (about 730 MB)
+#   4a: already downloaded into Ollama's usual folder? Move them here.
+#   4b: otherwise download them straight into prometheus/models.
 "$PY" -m core.ollama_local --move || true
-if ! "$PY" -m core.ollama_local --has "$MODEL"; then
-    info "Downloading LFM2.5 1.2B Instruct into prometheus/models (about 730 MB, first time only)"
-    "$PY" -m core.ollama_local --pull "$MODEL" || fail "Model download failed. Check your connection and run this again."
-fi
-ok "Model ready in prometheus/models"
+for MODEL in "qwen3:1.7b" "hf.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF:latest"; do
+    if ! "$PY" -m core.ollama_local --has "$MODEL"; then
+        info "Downloading $MODEL into prometheus/models (first time only)"
+        "$PY" -m core.ollama_local --pull "$MODEL" || fail "Model download failed. Check your connection and run this again."
+    fi
+done
+ok "Models ready in prometheus/models"
 
 # Step 5: requirements
 info "Installing Python packages"

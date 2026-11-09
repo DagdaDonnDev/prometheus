@@ -17,6 +17,7 @@ import sys
 import json
 import argparse
 import hashlib
+import shutil
 from pathlib import Path
 from typing import List, Dict, Optional, Generator, Tuple
 
@@ -702,9 +703,11 @@ WIKI_USER_AGENT = "Prometheus-offline-knowledge-ingest/1.0 (+https://github.com/
 
 
 def download_wikipedia(dest_dir: Path = WIKI_DOWNLOAD_DIR,
-                       base_url: str = WIKI_BASE_URL) -> Optional[Path]:
+                       base_url: str = WIKI_BASE_URL,
+                       dump_name: str = WIKI_DUMP_NAME,
+                       sums_name: str = WIKI_SUMS_NAME) -> Optional[Path]:
     """
-    Download the latest Simple English Wikipedia dump.
+    Download a Wikipedia dump file (by default the latest Simple English one).
 
     Step 1: download to <name>.part, resuming if a previous attempt was cut off
     Step 2: check the SHA-1 Wikimedia publishes (skipped with a warning if
@@ -716,8 +719,11 @@ def download_wikipedia(dest_dir: Path = WIKI_DOWNLOAD_DIR,
     import requests
 
     dest_dir.mkdir(parents=True, exist_ok=True)
-    final = dest_dir / WIKI_DUMP_NAME
-    part = dest_dir / (WIKI_DUMP_NAME + ".part")
+    final = dest_dir / dump_name
+    part = dest_dir / (dump_name + ".part")
+    if final.exists() and not part.exists():
+        print(f"  ✓ Already downloaded: {final}")
+        return final
     headers = {"User-Agent": WIKI_USER_AGENT}
 
     # Step 1: download (resume from .part if present)
@@ -726,7 +732,7 @@ def download_wikipedia(dest_dir: Path = WIKI_DOWNLOAD_DIR,
         headers["Range"] = f"bytes={have}-"
         print(f"  Resuming download at {have / 1024 / 1024:.0f} MB")
     try:
-        with requests.get(base_url + WIKI_DUMP_NAME, headers=headers,
+        with requests.get(base_url + dump_name, headers=headers,
                           stream=True, timeout=60) as r:
             if r.status_code == 416:          # .part is already complete
                 pass
@@ -754,12 +760,15 @@ def download_wikipedia(dest_dir: Path = WIKI_DOWNLOAD_DIR,
     # Step 2: verify
     expected = None
     try:
-        sums = requests.get(base_url + WIKI_SUMS_NAME,
+        sums = requests.get(base_url + sums_name,
                             headers={"User-Agent": WIKI_USER_AGENT}, timeout=30)
         if sums.ok:
+            # The list names files with their date ("enwiki-20261101-pages-…");
+            # match on what comes after it
+            want = dump_name.split("-", 2)[2]
             for line in sums.text.splitlines():
                 parts = line.split()
-                if len(parts) == 2 and parts[1].endswith("-pages-articles.xml.bz2"):
+                if len(parts) == 2 and parts[1].split("-", 2)[-1] == want:
                     expected = parts[0]
     except requests.RequestException:
         pass
@@ -804,52 +813,7 @@ def parse_wikipedia_dump(dump_path: Path, output_dir: Path,
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    def clean_wikitext(text: str) -> str:
-        """Strip Wikipedia markup to plain text."""
-        # Step 1: references first, before tags are stripped (or citation text leaks in)
-        text = re.sub(r'<ref[^>]*/>', '', text)
-        text = re.sub(r'<ref[^>]*>.*?</ref>', '', text, flags=re.DOTALL)
-        text = re.sub(r'<!--.*?-->', '', text, flags=re.DOTALL)
-
-        # Step 2: templates {{...}} (nested)
-        depth = 0
-        result = []
-        i = 0
-        while i < len(text):
-            if text[i:i+2] == "{{":
-                depth += 1
-                i += 2
-            elif text[i:i+2] == "}}":
-                depth = max(0, depth - 1)
-                i += 2
-            elif depth == 0:
-                result.append(text[i])
-                i += 1
-            else:
-                i += 1
-        text = "".join(result)
-
-        # Step 3: files, images, categories; links → their text
-        text = re.sub(r'\[\[(?:File|Image|Category):[^\]]*\]\]', '', text,
-                      flags=re.IGNORECASE)
-        text = re.sub(r'\[\[(?:[^|\]]+\|)?([^\]]+)\]\]', r'\1', text)
-        text = re.sub(r'\[https?://\S+\s+([^\]]+)\]', r'\1', text)
-        text = re.sub(r'\[https?://\S+\]', '', text)
-
-        # Step 4: HTML tags and tables
-        text = re.sub(r'<[^>]+>', ' ', text)
-        text = re.sub(r'^\s*[|!].*$', '', text, flags=re.MULTILINE)
-        text = re.sub(r'^\s*\{\|.*$', '', text, flags=re.MULTILINE)
-        text = re.sub(r'^\s*\|\}.*$', '', text, flags=re.MULTILINE)
-
-        # Step 5: headings and bold/italic markup (keep the words)
-        text = re.sub(r'={2,}([^=]+)={2,}', r'\1', text)
-        text = re.sub(r"'{2,}", '', text)
-
-        # Step 6: whitespace
-        text = re.sub(r'\n{3,}', '\n\n', text)
-        text = re.sub(r'[ \t]+', ' ', text)
-        return text.strip()
+    from core.wikitext import clean_wikitext
 
     def safe_filename(title: str) -> str:
         safe = re.sub(r'[^\w\s-]', '', title)
@@ -982,6 +946,46 @@ def ingest_wikipedia(dump_path: Optional[str] = None, max_articles: int = 0,
     return True
 
 
+def ingest_wikipedia_full(dump_path: Optional[str] = None, top: int = 1_000_000,
+                          workers: int = 0) -> bool:
+    """
+    The most linked-to English Wikipedia articles → knowledge_base/wikipedia_full.sqlite.
+
+        python ingest.py --download-wikipedia-full [--top 1000000]
+        python ingest.py --wikipedia-full <enwiki-…-multistream.xml.bz2> [--top N]
+
+    Step 1: download the multistream dump and its index (about 24 GB; resumes)
+    Step 2: build (core/wiki_full.py) — two passes over the dump on every core,
+            then the search index. Hours, once; running again carries on.
+    """
+    from core import wiki_full
+    if dump_path:
+        dump = Path(dump_path)
+        index = dump.with_name(dump.name.replace(".xml.bz2", "-index.txt.bz2"))
+        if not dump.exists() or not index.exists():
+            print(f"Need both {dump.name} and {index.name} side by side.")
+            return False
+    else:
+        print("\n🌐 Downloading English Wikipedia (about 24 GB — resumes if cut off)")
+        index = download_wikipedia(base_url=wiki_full.BASE_URL, dump_name=wiki_full.INDEX_NAME,
+                                   sums_name=wiki_full.SUMS_NAME)
+        dump = index and download_wikipedia(base_url=wiki_full.BASE_URL, dump_name=wiki_full.DUMP_NAME,
+                                            sums_name=wiki_full.SUMS_NAME)
+        if not dump:
+            return False
+    free = shutil.disk_usage(KNOWLEDGE_PATH if KNOWLEDGE_PATH.exists() else ".").free / 1e9
+    need = 15 * top / 1_000_000
+    if free < need:
+        print(f"  ⚠ About {need:.0f} GB is needed for {top:,} articles and {free:.0f} GB is free.")
+    print(f"\n📖 Building the {top:,} most linked-to articles → {KNOWLEDGE_PATH / wiki_full.DB_NAME}")
+    print("   Takes a few hours. You can stop it and run the same command later to carry on.")
+    count = wiki_full.build(dump, index, KNOWLEDGE_PATH / wiki_full.DB_NAME, top=top, workers=workers)
+    if count:
+        print(f"\n✅ Done. Chat and the Wikipedia section use it from now on.\n"
+              f"   The download in {dump.parent} can be deleted to free about 24 GB.")
+    return count > 0
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Prometheus knowledge base ingestion pipeline"
@@ -1009,6 +1013,30 @@ def main():
         "--download-wikipedia",
         action="store_true",
         help="Download the latest Simple English Wikipedia dump, then ingest it"
+    )
+    parser.add_argument(
+        "--download-wikipedia-full",
+        action="store_true",
+        help="Download English Wikipedia and keep the most linked-to articles (--top, default 1,000,000)"
+    )
+    parser.add_argument(
+        "--wikipedia-full",
+        metavar="DUMP_FILE",
+        help="Build from an English multistream dump you already have (its -index file beside it)"
+    )
+    parser.add_argument(
+        "--top",
+        type=int,
+        default=1_000_000,
+        metavar="N",
+        help="With --download-wikipedia-full / --wikipedia-full: how many articles to keep"
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Processes to use for the full Wikipedia build (default: all cores but one)"
     )
     parser.add_argument(
         "--wiki-index",
@@ -1041,6 +1069,10 @@ def main():
     if args.wiki_index:
         from core.wiki_index import build_index
         ok = build_index(KNOWLEDGE_PATH / "wikipedia", KNOWLEDGE_PATH / "wikipedia_search.sqlite") > 0
+        sys.exit(0 if ok else 1)
+
+    if args.download_wikipedia_full or args.wikipedia_full:
+        ok = ingest_wikipedia_full(args.wikipedia_full, top=args.top, workers=args.workers)
         sys.exit(0 if ok else 1)
 
     if args.wikipedia or args.download_wikipedia:

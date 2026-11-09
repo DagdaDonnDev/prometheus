@@ -38,7 +38,7 @@ class ImagePanel(QFrame):
         image_paths = [p for p in (image_paths or []) if Path(p).exists()][:3]
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8 if PHONE_LAYOUT else 40, 0, 8, 6)
+        layout.setContentsMargins(2, 0, 8, 6)
         layout.setSpacing(6)
 
         # Step 1
@@ -132,7 +132,7 @@ class MessageBubble(QFrame):
         self._label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         self._label.setContextMenuPolicy(Qt.NoContextMenu)   # right-click → our menu
         font = self._label.font()
-        font.setPointSize(13)
+        font.setPointSize(11 if PHONE_LAYOUT else 12)
         self._label.setFont(font)
 
         self._menu_btn = QPushButton("⋯")
@@ -145,20 +145,17 @@ class MessageBubble(QFrame):
         if not PHONE_LAYOUT:
             self._menu_btn.setVisible(False)          # appears on hover
 
+        # Yours: a soft bubble on the right. Replies: plain text across the
+        # column, like a page — easier to read than a box
         if role == "user":
-            layout.addStretch()
+            layout.setContentsMargins(14, 10, 14, 10)
+            self._label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
             layout.addWidget(self._menu_btn, 0, Qt.AlignTop)
             layout.addWidget(self._label)
         else:
-            if not PHONE_LAYOUT:   # phone: no icon column, every pixel goes to text
-                icon = QLabel("⚡")
-                icon.setObjectName("bubbleIcon")
-                icon.setFixedWidth(24)
-                icon.setAlignment(Qt.AlignTop)
-                layout.addWidget(icon)
+            layout.setContentsMargins(2, 4, 2, 4)
             layout.addWidget(self._label)
             layout.addWidget(self._menu_btn, 0, Qt.AlignTop)
-            layout.addStretch()
 
     # ── Actions ────────────────────────────────────────────────────────────
 
@@ -196,6 +193,18 @@ class MessageBubble(QFrame):
             menu.addAction(labels[name],
                            lambda n=name: self.action.emit(n, self.msg or {"content": self.get_text()}))
         menu.exec(where)
+
+    def fit_width(self, max_width: int):
+        """
+        Your bubble: as wide as the text (up to max_width), so short messages
+        aren't squeezed onto two lines or cut off.
+        """
+        fm = self._label.fontMetrics()
+        longest = max((fm.horizontalAdvance(line) for line in (self._label.text() or " ").split("\n")),
+                      default=0)
+        inner = max_width - 28 - (self._menu_btn.width() if PHONE_LAYOUT else 0)
+        self._label.setMinimumWidth(min(longest + 6, inner))
+        self.setMaximumWidth(max_width)
 
     def append_text(self, text: str):
         current = self._label.text()
@@ -245,11 +254,22 @@ class ChatView(QWidget):
         self._scroll.setObjectName("chatScroll")
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
+        # Messages sit in a centred reading column (easier on the eyes than
+        # lines running the full width of a big window)
         self._messages_widget = QWidget()
         self._messages_widget.setObjectName("messagesWidget")
-        self._messages_layout = QVBoxLayout(self._messages_widget)
-        self._messages_layout.setContentsMargins(8, 8, 8, 8)
-        self._messages_layout.setSpacing(8)
+        centre = QHBoxLayout(self._messages_widget)
+        centre.setContentsMargins(0, 0, 0, 0)
+        column = QWidget()
+        column.setObjectName("messagesColumn")
+        if not PHONE_LAYOUT:
+            column.setMaximumWidth(820)
+        centre.addStretch()
+        centre.addWidget(column, 100)
+        centre.addStretch()
+        self._messages_layout = QVBoxLayout(column)
+        self._messages_layout.setContentsMargins(*((12, 12, 12, 12) if PHONE_LAYOUT else (24, 20, 24, 20)))
+        self._messages_layout.setSpacing(14)
         self._messages_layout.addStretch()
 
         self._scroll.setWidget(self._messages_widget)
@@ -302,8 +322,11 @@ class ChatView(QWidget):
         layout = self._messages_layout
         while layout.count() > 1:
             item = layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+            w = item.widget()
+            if w:
+                w.hide()                 # off screen now, not after the next event loop
+                w.setParent(None)
+                w.deleteLater()
 
     def _new_bubble(self, role: str, content: str) -> MessageBubble:
         """Every bubble reports its menu actions through message_action."""
@@ -326,9 +349,13 @@ class ChatView(QWidget):
     def add_message(self, role: str, content: str):
         self._hide_welcome()
         bubble = self._new_bubble(role, content)
-        self._messages_layout.insertWidget(
-            self._messages_layout.count() - 1, bubble
-        )
+        if role == "user":
+            # yours hugs the right edge and is only as wide as it needs to be
+            bubble.fit_width(320 if PHONE_LAYOUT else 580)
+            self._messages_layout.insertWidget(self._messages_layout.count() - 1, bubble,
+                                               0, Qt.AlignRight)
+        else:
+            self._messages_layout.insertWidget(self._messages_layout.count() - 1, bubble)
         QTimer.singleShot(50, self._scroll_to_bottom)
 
     def start_assistant_message(self):
@@ -360,7 +387,7 @@ class ChatView(QWidget):
                 stamp_text += f"   ✓ {response_ms}ms"
             stamp = QLabel(stamp_text)
             stamp.setObjectName("timingStamp")
-            stamp.setContentsMargins(40, 0, 0, 0)
+            stamp.setContentsMargins(2, 0, 0, 0)
             stamp.setToolTip(
                 "🔊 when you started hearing the reply · ✓ when it finished"
                 + (f"\n{breakdown}" if breakdown else "")
@@ -388,7 +415,7 @@ class ChatView(QWidget):
         if getattr(self, "_research_label", None) is None:
             self._research_label = QLabel()
             self._research_label.setObjectName("researchLine")
-            self._research_label.setContentsMargins(8 if PHONE_LAYOUT else 40, 4, 8, 4)
+            self._research_label.setContentsMargins(2, 4, 8, 4)
             self._messages_layout.insertWidget(self._messages_layout.count() - 1, self._research_label)
             self._research_dots = 0
             self._research_timer = QTimer(self)
@@ -419,7 +446,7 @@ class ChatView(QWidget):
         bar = QFrame()
         bar.setObjectName("verdictBar")
         outer = QVBoxLayout(bar)
-        outer.setContentsMargins(8 if PHONE_LAYOUT else 40, 2, 8, 2)
+        outer.setContentsMargins(2, 2, 8, 2)
         outer.setSpacing(4)
 
         # Desktop: one row. Phone: question on top, buttons in a 2×2 grid

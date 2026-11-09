@@ -32,7 +32,8 @@ PROJECT_DIR = Path(__file__).resolve().parent.parent
 MODELS_DIR = PROJECT_DIR / "models"
 HOST = "127.0.0.1:11435"
 URL = f"http://{HOST}"
-DEFAULT_MODEL = "hf.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF:latest"
+DEFAULT_MODEL = "hf.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF:latest"   # the librarian
+SPEAKER_MODEL = "qwen3:1.7b"                                        # the speaker
 
 _proc: Optional[subprocess.Popen] = None
 
@@ -334,10 +335,11 @@ def _configured_models() -> List[str]:
     try:
         from core.config import CONFIG_PATH
         data = json.loads(Path(CONFIG_PATH).read_text(encoding="utf-8"))
-        names = {data.get("fast_model"), data.get("companion_model")}
-        return sorted(n for n in names if n) or [DEFAULT_MODEL]
+        names = {data.get("speaker_model") or SPEAKER_MODEL,
+                 data.get("librarian_model") or DEFAULT_MODEL}
+        return sorted(n for n in names if n)
     except Exception:
-        return [DEFAULT_MODEL]
+        return [SPEAKER_MODEL, DEFAULT_MODEL]
 
 
 def main(argv: List[str]) -> int:

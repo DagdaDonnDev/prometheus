@@ -1,6 +1,7 @@
 """
-What Prometheus knows about the person — learned from what they say, kept
-in memory (memory/user_memory.json → "user"), editable by them.
+What Prometheus knows about the person — proposed from what they say,
+confirmed by them in the Review tab (core/claims), then kept in memory
+(memory/user_memory.json → "user"), editable by them.
 
 Learning is plain pattern matching on their own messages, never the model's
 guess: "my sister Kate", "I live in Cork", "I work as a nurse", "I love
@@ -54,38 +55,37 @@ def _add(lst: List[str], value: str, cap: int = 30) -> bool:
     return True
 
 
-def learn(text: str, memory) -> List[str]:
+def extract(text: str) -> List["Claim"]:
     """
-    Learn facts from one of their messages. Returns plain notes of what
-    changed ("you like hiking") — empty if nothing was learned.
+    Claims about themselves in one message — proposals only, nothing is
+    saved here (core/claims stages them for review).
 
-    Step 1: name, place, work (one value each — the newest wins)
+    Step 1: name, place, work
     Step 2: people and pets ("my sister Kate", "my dog is called Max")
-    Step 3: likes and dislikes, favourites, skills (lists)
-    Step 4: save if anything changed
+    Step 3: likes and dislikes, favourites, skills
+    Confidence: how reliably that pattern means what it seems to.
     """
-    u = memory.data.setdefault("user", {})
-    for key in ("likes", "dislikes", "known_skills", "mentioned_people"):
-        u.setdefault(key, [])
+    from core.claims import Claim
     t = " ".join(text.split())
-    notes: List[str] = []
+    out: List[Claim] = []
+
+    def add(field, value, note, confidence):
+        if value and not any(c.field == field and c.value.lower() == value.lower() for c in out):
+            out.append(Claim(field=field, value=value, note=note, utterance=text.strip(),
+                             confidence=confidence))
 
     # Step 1
     m = re.search(r"\b(?:my name is|my name's|call me|i'?m called)\s+" + _NAME + r"\b", t, re.I)
     if m and m.group(1)[:1].isupper() and m.group(1).lower() not in _NOT_A_TASTE:
-        name = m.group(1)
-        if u.get("name") != name:
-            u["name"] = name
-            notes.append(f"your name is {name}")
+        add("name", m.group(1), f"your name is {m.group(1)}", 0.9)
 
     # the lead-in in any case, the place itself Capitalised
     m = re.search(r"(?i:\b(?:i live in|i'?m from|i'?m based in|i grew up in|we live in))\s+" + _PLACE, t)
     if m:
         place = m.group(1).strip(" ,")
-        if u.get("location_estimate") != place:
-            u["location_estimate"] = place
-            notes.append(f"you live in {place}" if "grew up" not in m.group(0).lower()
-                         else f"you grew up in {place}")
+        grew = "grew up" in m.group(0).lower()
+        add("location_estimate", place, f"you grew up in {place}" if grew else f"you live in {place}",
+            0.6 if grew else 0.85)
 
     m = re.search(r"\b(?:i work as|i'?m working as|my job is|i'?m employed as)\s+(?:an?\s+)?(.+)", t, re.I)
     at = re.search(r"\bi work (at|for)\s+(.+)", t, re.I)
@@ -93,9 +93,8 @@ def learn(text: str, memory) -> List[str]:
         work = _phrase(m.group(1) if m else at.group(2), 5)
         if work and not m:
             work = f"{at.group(1).lower()} {work}"          # "at the hospital"
-        if work and work.lower() not in _NOT_A_TASTE and u.get("work") != work:
-            u["work"] = work
-            notes.append(f"you work {'as ' if m else ''}{work}")
+        if work and work.lower() not in _NOT_A_TASTE:
+            add("work", work, f"you work {'as ' if m else ''}{work}", 0.75)
 
     # Step 2
     for m in re.finditer(r"\bmy\s+(" + RELATIONS + r")(?:'s name is|\s+is called|\s+called|\s+named|,)?\s+"
@@ -104,15 +103,13 @@ def learn(text: str, memory) -> List[str]:
         if not who[:1].isupper() or who.split()[0].lower() in ("is", "was", "and", "has", "just", "i"):
             continue
         who = who.split()[0] if len(who.split()) > 1 and who.split()[1][:1].islower() else who
-        if _add(u["mentioned_people"], f"{who} ({rel})"):
-            notes.append(f"{who} is your {rel}")
+        add("mentioned_people", f"{who} ({rel})", f"{who} is your {rel}", 0.85)
     for m in re.finditer(r"\bmy\s+(" + PETS + r")(?:'s name is|\s+is called|\s+called|\s+named|,)?\s+"
                          + _NAME + r"\b", t, re.I):
         pet, who = m.group(1).lower(), m.group(2).split()[0]
         if not who[:1].isupper() or who.lower() in ("is", "was", "and", "has", "just", "i"):
             continue
-        if _add(u["mentioned_people"], f"{who} ({pet})"):
-            notes.append(f"{who} is your {pet}")
+        add("mentioned_people", f"{who} ({pet})", f"{who} is your {pet}", 0.85)
 
     # Step 3
     for m in re.finditer(r"\bi\s+(?:really\s+|absolutely\s+|just\s+)?(love|like|enjoy|adore|am into|'m into)\s+(.+)", t, re.I):
@@ -120,30 +117,32 @@ def learn(text: str, memory) -> List[str]:
             continue
         thing = _phrase(m.group(2))
         if thing and thing.lower() not in _NOT_A_TASTE and thing.split()[0].lower() not in _NOT_A_TASTE:
-            if _add(u["likes"], thing):
-                notes.append(f"you like {thing}")
+            add("likes", thing, f"you like {thing}", 0.7)
     for m in re.finditer(r"\bi\s+(?:really\s+)?(hate|can'?t stand|don'?t like|do not like|dislike|detest)\s+(.+)", t, re.I):
         thing = _phrase(m.group(2))
         if thing and thing.lower() not in _NOT_A_TASTE and thing.split()[0].lower() not in _NOT_A_TASTE:
-            if _add(u["dislikes"], thing):
-                notes.append(f"you don't like {thing}")
+            add("dislikes", thing, f"you don't like {thing}", 0.7)
     for m in re.finditer(r"\bmy\s+fav(?:ou?rite)?\s+([a-z ]{2,20}?)\s+(?:is|are|has to be)\s+(.+)", t, re.I):
         thing = _phrase(m.group(2))
         if thing and thing.split()[0].lower() not in _NOT_A_TASTE:
-            entry = f"{thing} (favourite {m.group(1).strip().lower()})"
-            if _add(u["likes"], entry):
-                notes.append(f"your favourite {m.group(1).strip().lower()} is {thing}")
+            kind = m.group(1).strip().lower()
+            add("likes", f"{thing} (favourite {kind})", f"your favourite {kind} is {thing}", 0.85)
     for m in re.finditer(r"\bi(?:'m| am)\s+(?:really\s+|pretty\s+)?good at\s+(.+)|\bi know how to\s+(.+)|"
                          r"\bi(?:'m| am)\s+(?:a\s+)?trained\s+(.+)", t, re.I):
         skill = _phrase(next(g for g in m.groups() if g), 5)
         if skill and skill.split()[0].lower() not in _NOT_A_TASTE:
-            if _add(u["known_skills"], skill):
-                notes.append(f"you can {skill}" if m.group(2) else f"you're good at {skill}")
+            add("known_skills", skill, f"you can {skill}" if m.group(2) else f"you're good at {skill}", 0.6)
+    return out
 
-    # Step 4
-    if notes:
-        memory.save()
-    return notes
+
+def learn(text: str, memory) -> List[str]:
+    """
+    Stage 1 of a fact's life: claims in this message go to the review list
+    (core/claims) — NOT into the profile. Returns plain notes of what was
+    added for review ("Kate is your sister"); empty if nothing new.
+    """
+    from core import claims
+    return [c.note for c in claims.stage(extract(text), memory)]
 
 
 def about_line(memory, max_words: int = 55) -> str:

@@ -165,6 +165,9 @@ def _patch_buildozer_config(scripts: Path):
             merge("requirements", EXTRA_REQUIREMENTS)
             merge("android.permissions", EXTRA_PERMISSIONS, sep=", ")
             merge("source.exclude_dirs", EXCLUDE_DIRS)
+            # Wikipedia databases (up to ~10 GB) and dumps stay on the computer
+            merge("source.exclude_patterns", ["knowledge_base/*.sqlite", "knowledge_base/*.building",
+                                              "knowledge_base/*.npy", "*.xml.bz2"])
             self.set_value("app", "title", APP_NAME, raise_warning=False)
             self.set_value("app", "orientation", "portrait", raise_warning=False)
             # App icon and launch screen from assets/icon.png

@@ -39,6 +39,31 @@ class LLMWorker(QThread):
         )
 
 
+class PrepareWorker(QThread):
+    """
+    Everything before the speaker talks (core/pipeline.prepare_knowledge),
+    off the UI thread: with two models it asks the speaker for a library
+    request and the librarian for the facts — each a short model call.
+    """
+    prepared = Signal(object)      # PreparedAnswer
+    progress = Signal(str)
+    failed   = Signal(str)
+
+    def __init__(self, pipeline, tab, user_input, routing_plan, trace):
+        super().__init__()
+        self.args = (pipeline, tab, user_input, routing_plan, trace)
+
+    def run(self):
+        pipeline, tab, user_input, routing_plan, trace = self.args
+        try:
+            result = pipeline.prepare_knowledge(tab, user_input, routing_plan, trace,
+                                                progress=self.progress.emit)
+        except Exception as e:
+            self.failed.emit(str(e))
+            return
+        self.prepared.emit(result)
+
+
 class TrainingWorker(QThread):
     """
     Runs the Training Path (first-principles derivation) off the UI thread.

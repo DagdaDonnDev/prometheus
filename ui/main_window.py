@@ -25,7 +25,6 @@ from core.tts import TTSEngine
 from core.stt import STTEngine
 from core.context_manager import ContextManager
 
-from ui.tab_bar import TabBar
 from ui.chat_view import ChatView
 from ui.input_bar import InputBar
 from ui.sidebar import Sidebar
@@ -95,6 +94,7 @@ class MainWindow(QMainWindow):
 
         self._setup_ui()
         self._apply_assistant_name()
+        self._on_review_changed()           # "Review (n)" if anything is waiting
         self._setup_shortcuts()
         self._check_ollama()
         self._start_background_init()
@@ -246,25 +246,25 @@ class MainWindow(QMainWindow):
         else:
             main_layout.addWidget(header)
 
-        # Tab bar
-        self.tab_bar = TabBar(self.tab_manager)
-        self.tab_bar.tab_selected.connect(self._on_tab_selected)
-        self.tab_bar.tab_add_requested.connect(self._on_add_tab)
-        self.tab_bar.quick_access_requested.connect(self._show_quick_access)
-        main_layout.addWidget(self.tab_bar)
-
-        # Content area (splitter: chats | chat | sidebar)
+        # Content area (splitter: menu | chat | sidebar)
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.setHandleWidth(1)
 
-        # Chats bar on the left: new chat, search, this tab's chats
+        # Left menu: sections on top, this section's chats underneath
+        # (replaces the old row of tabs; same API, so self.tab_bar still works)
         from ui.chats_panel import ChatsPanel
+        from ui.nav_panel import NavPanel
         self.chats_panel = ChatsPanel()
         self.chats_panel.new_chat_requested.connect(self._new_chat)
         self.chats_panel.open_requested.connect(self._open_chat)
         self.chats_panel.delete_requested.connect(self._delete_chat)
         self.chats_panel.rename_requested.connect(self._rename_chat)
-        self.splitter.addWidget(self.chats_panel)
+        self.nav = NavPanel(self.tab_manager, self.chats_panel)
+        self.tab_bar = self.nav
+        self.nav.tab_selected.connect(self._on_tab_selected)
+        self.nav.tab_add_requested.connect(self._on_add_tab)
+        self.nav.quick_access_requested.connect(self._show_quick_access)
+        self.splitter.addWidget(self.nav)
 
         # Chat view (welcome panel questions send straight away)
         self.chat_view = ChatView()
@@ -272,7 +272,14 @@ class MainWindow(QMainWindow):
         self.chat_view.suggestion_clicked.connect(self._on_send)
         self.chat_view.message_action.connect(self._on_message_action)
         self.chat_view.assessment_requested.connect(self._show_assessment)
-        self.splitter.addWidget(self.chat_view)
+        # The conversation and its message box sit together, right of the menu
+        self._chat_pane = QWidget()
+        self._chat_pane.setObjectName("chatPane")
+        self._chat_pane_lay = QVBoxLayout(self._chat_pane)
+        self._chat_pane_lay.setContentsMargins(0, 0, 0, 0)
+        self._chat_pane_lay.setSpacing(0)
+        self._chat_pane_lay.addWidget(self.chat_view, 1)
+        self.splitter.addWidget(self._chat_pane)
 
         # Sidebar (situation, inventory, map)
         self.sidebar = Sidebar(self.memory)
@@ -280,13 +287,13 @@ class MainWindow(QMainWindow):
         self.sidebar.setMinimumWidth(200)
         self.splitter.addWidget(self.sidebar)
 
-        self.splitter.setSizes([240, 800, 280])
+        self.splitter.setSizes([260, 800, 280])
         self.splitter.setStretchFactor(0, 0)
         self.splitter.setStretchFactor(1, 1)
         self.splitter.setStretchFactor(2, 0)
         if PHONE_LAYOUT:
-            self.chats_panel.hide()            # phone: the Chats button swaps it in
-        self._chats_btn.setChecked(not self.chats_panel.isHidden())
+            self.nav.hide()                    # phone: ☰ swaps it in
+        self._chats_btn.setChecked(not self.nav.isHidden())
 
         # Phone: the situation panel takes the whole width when opened,
         # so start with it closed
@@ -316,7 +323,7 @@ class MainWindow(QMainWindow):
         self._speech_timer.timeout.connect(self._voice_tick)
         self._speech_timer.start()
         self.input_bar.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
-        main_layout.addWidget(self.input_bar)
+        self._chat_pane_lay.addWidget(self.input_bar)
 
         # Status bar
         self.status_bar = QStatusBar()
@@ -342,7 +349,16 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(16, 0, 12, 0)
         layout.setSpacing(4)
 
-        # Left: icon, name and day
+        # Left: the menu button (sections and chats), icon, name and day
+        self._chats_btn = QPushButton("☰")
+        self._chats_btn.setObjectName("menuBtn")
+        self._chats_btn.setCheckable(True)
+        self._chats_btn.setFixedSize(36, 36)
+        self._chats_btn.setCursor(Qt.PointingHandCursor)
+        self._chats_btn.setToolTip("Sections and chats")
+        self._chats_btn.clicked.connect(self._toggle_chats)
+        layout.addWidget(self._chats_btn)
+        layout.addSpacing(10)
         icon_path = os.path.join("assets", "icon.png")
         if os.path.exists(icon_path):
             from PySide6.QtGui import QPixmap
@@ -356,18 +372,16 @@ class MainWindow(QMainWindow):
             layout.addWidget(logo)
             layout.addSpacing(8)
         name = (self.config.assistant_name or "Prometheus").strip()
-        title = QLabel(name[:1].upper() if PHONE_LAYOUT else name.upper())
+        title = QLabel(name)
         self._title_label = title
         title.setObjectName("headerTitle")
-        font = title.font()
-        font.setPointSize(13)
-        font.setBold(True)
-        title.setFont(font)
         layout.addWidget(title)
 
         self._day_label = QLabel(self._get_day_string())
         self._day_label.setObjectName("headerDay")
         layout.addWidget(self._day_label)
+        if PHONE_LAYOUT:
+            self._day_label.hide()            # room for the buttons; the Info panel shows the day
         layout.addStretch()
 
         def header_button(text, tip, slot, checkable=False):
@@ -388,8 +402,6 @@ class MainWindow(QMainWindow):
             header_button("Skills", "Rebuild progress — 55 skills in 8 stages",
                           self._show_skill_tree)
             header_button("Map", "Offline world map", self._show_map)
-        self._chats_btn = header_button("Chats", "Your chats in this tab — new, search, switch",
-                                        self._toggle_chats, checkable=True)
         self._sidebar_btn = header_button("Info", "Show or hide your situation panel",
                                           self._toggle_sidebar, checkable=True)
         header_button("Settings", "Name, model, voice", self._show_settings)
@@ -477,7 +489,9 @@ class MainWindow(QMainWindow):
         self._ollama_timer.stop()
         self._warm_up_model()
         voice_name = self.tts.current_voice_name()
-        ready = f"✓ Ready · {self.config.fast_model}"
+        ready = f"✓ Ready · {self.config.speaker_model}"
+        if self.config.two_models:
+            ready += f" (librarian: {self.config.librarian_model.split('/')[-1]})"
         if voice_name and voice_name != "None":
             ready += f" · Voice: {voice_name}"
         self.status_bar.showMessage(ready, 6000)
@@ -486,7 +500,7 @@ class MainWindow(QMainWindow):
         """Header title and the companion tab use the chosen name."""
         self.knowledge.prompt_passages = max(1, int(self.config.rag_results or 3))
         name = (self.config.assistant_name or "Prometheus").strip()
-        self._title_label.setText(name[:1].upper() if PHONE_LAYOUT else name.upper())
+        self._title_label.setText(name)
         tab = self.tab_manager.get_tab("prometheus")
         if tab and tab.name != name:
             tab.name = name
@@ -502,13 +516,20 @@ class MainWindow(QMainWindow):
         model choice, on a background thread.
         """
         import threading
-        key = (self.llm.base_url, self.config.companion_model)
+        key = (self.llm.base_url, self.config.speaker_model, self.config.librarian_model)
         if getattr(self, "_warmed", None) == key:
             return
         self._warmed = key
         plan = self.pipeline.route("hi", "prometheus")
         prompt = self.pipeline._prepare_companion("hi", plan).system_prompt
-        threading.Thread(target=self.llm.warm_up, args=(prompt,), daemon=True).start()
+
+        def warm():
+            # Both models loaded and kept: the speaker reads its chat prompt,
+            # the librarian just loads (its prompts change every time)
+            self.llm.warm_up(prompt)
+            if self.config.two_models and self.config.librarian_model != self.config.speaker_model:
+                self.llm.warm_up(model=self.config.librarian_model)
+        threading.Thread(target=warm, daemon=True).start()
 
     def _start_background_init(self):
         """Initialize heavy components in background after UI shown."""
@@ -548,12 +569,17 @@ class MainWindow(QMainWindow):
             self._show_wiki_panel()
             return
 
+        # Review tab — confirm what it picked up about you, not a chat
+        if tab_id == "review":
+            self._show_review_panel()
+            return
+
         self._hide_messages_panel()
         self._hide_wiki_panel()
+        self._hide_review_panel()
         self.chat_view.load_tab(tab)
         self._stop_editing()
-        if self._chats_btn.isChecked() and not PHONE_LAYOUT:
-            self.chats_panel.show()
+        self.chats_panel.show()               # chat sections list their chats in the menu
         self.chats_panel.refresh(tab)
         self.input_bar.set_recall([m["content"] for m in tab.history if m.get("role") == "user"])
 
@@ -617,20 +643,27 @@ class MainWindow(QMainWindow):
     # ── Chats ──────────────────────────────────────────────────────────────
 
     def _toggle_chats(self):
-        """Desktop: show/hide the left bar. Phone: swap it with the conversation."""
-        visible = self.chats_panel.isVisible()
+        """
+        ☰ — desktop: show or hide the left menu.
+        Phone: the menu takes the whole screen; ☰ again (or picking a section
+        or a chat) goes back to what was open.
+        """
+        opening = self.nav.isHidden()
         if PHONE_LAYOUT:
-            self.chats_panel.setVisible(not visible)
-            self.chat_view.setVisible(visible)
-            self.input_bar.setVisible(visible)
-            if self.sidebar.isVisible():
-                self.sidebar.hide()
+            if opening:
+                for w in (self._chat_pane, self.sidebar,
+                          getattr(self, "_wiki_widget", None), getattr(self, "_review_widget", None)):
+                    if w is not None:
+                        w.hide()
                 self._sidebar_btn.setChecked(False)
-            self._chats_btn.setText("Chat" if not visible else "Chats")
+                self.nav.show()
+            else:
+                self.nav.hide()
+                self._load_tab(self.tab_manager.active_tab_id)
         else:
-            self.chats_panel.setVisible(not visible)
-        self._chats_btn.setChecked(not visible)
-        if not visible:
+            self.nav.setVisible(opening)
+        self._chats_btn.setChecked(opening)
+        if opening:
             self.chats_panel.refresh(self.tab_manager.get_active_tab())
 
     def _after_chat_change(self, tab):
@@ -639,7 +672,7 @@ class MainWindow(QMainWindow):
         self._stop_editing()
         self.input_bar.set_recall([m["content"] for m in tab.history if m.get("role") == "user"])
         self.chats_panel.refresh(tab)
-        if PHONE_LAYOUT and self.chats_panel.isVisible():
+        if PHONE_LAYOUT and self.nav.isVisible():
             self._toggle_chats()             # phone: back to the conversation
         self.input_bar.focus_input()
 
@@ -692,16 +725,44 @@ class MainWindow(QMainWindow):
     def _show_wiki_panel(self):
         from ui.wiki_search import WikiSearchWidget
         self._hide_messages_panel()
+        self._hide_review_panel()
         if not hasattr(self, "_wiki_widget"):
             self._wiki_widget = WikiSearchWidget(self.knowledge)
             self._wiki_widget.ask_about.connect(self._ask_about_article)
             self.splitter.insertWidget(1, self._wiki_widget)
-        self.chat_view.hide()
+        self._chat_pane.hide()
         self.input_bar.hide()
         self.chats_panel.hide()            # Wikipedia isn't a chat
         self._wiki_widget.show()
         self._wiki_widget.focus_search()
         self.setWindowTitle(f"{self.config.assistant_name or 'Prometheus'} — 📖 Wikipedia")
+
+    def _show_review_panel(self):
+        from ui.review_panel import ReviewPanel
+        self._hide_messages_panel()
+        self._hide_wiki_panel()
+        if not hasattr(self, "_review_widget"):
+            self._review_widget = ReviewPanel(self.memory)
+            self._review_widget.changed.connect(self._on_review_changed)
+            self.splitter.insertWidget(1, self._review_widget)
+        self._chat_pane.hide()
+        self.input_bar.hide()
+        self.chats_panel.hide()
+        self._review_widget.refresh()
+        self._review_widget.show()
+        self.setWindowTitle(f"{self.config.assistant_name or 'Prometheus'} — Review")
+
+    def _hide_review_panel(self):
+        if hasattr(self, "_review_widget"):
+            self._review_widget.hide()
+
+    def _on_review_changed(self, waiting: int = -1):
+        """Tab label shows how many are waiting; accepted facts reach the side panel."""
+        from core import claims
+        if waiting < 0:
+            waiting = claims.pending_count()
+        self.tab_bar.set_label("review", f"Review ({waiting})" if waiting else "Review")
+        self.sidebar.refresh()
 
     def _hide_wiki_panel(self):
         if hasattr(self, "_wiki_widget"):
@@ -720,7 +781,7 @@ class MainWindow(QMainWindow):
             self._messages_widget = MessagesWidget(self.p2p)
             self.splitter.insertWidget(1, self._messages_widget)
 
-        self.chat_view.hide()
+        self._chat_pane.hide()
         self._messages_widget.show()
         self.input_bar.hide()
         self.setWindowTitle("Prometheus — 📡 Messages")
@@ -733,12 +794,16 @@ class MainWindow(QMainWindow):
     def _hide_messages_panel(self):
         if hasattr(self, '_messages_widget'):
             self._messages_widget.hide()
-        self.chat_view.show()
+        self._chat_pane.show()
         self.input_bar.show()
 
     def _on_tab_selected(self, tab_id: str):
         if self._generating:
+            self.tab_bar.set_active(self.tab_manager.active_tab_id)
             return  # Don't switch while generating
+        if PHONE_LAYOUT and self.nav.isVisible():
+            self.nav.hide()                   # phone: picking a section closes the menu
+            self._chats_btn.setChecked(False)
         self._load_tab(tab_id)
 
     def _on_add_tab(self):
@@ -790,8 +855,9 @@ class MainWindow(QMainWindow):
         from core.profile import learn
         # (shown once the reply is done, so the "thinking" status doesn't hide it)
         learned = learn(text, self.memory)
-        self._learned_note = ("Remembered: " + "; ".join(learned) +
-                              "  (Settings → You to change)") if learned else ""
+        self._learned_note = ("To confirm in the Review tab: " + "; ".join(learned)) if learned else ""
+        if learned:
+            self._on_review_changed()
 
         # Add user message
         tab.add_message("user", text)
@@ -926,7 +992,23 @@ class MainWindow(QMainWindow):
         The Knowledge Path. Steps 2–10 run in core/pipeline.py (shared with
         Android); this method only handles the UI and step 11 (streaming).
         """
-        prepared = self.pipeline.prepare_knowledge(tab, user_input, routing_plan, trace)
+        # Steps 2–10 run in the background (with two models they include the
+        # speaker's library request and the librarian's facts); a late result
+        # from a stopped query is ignored
+        from ui.workers import PrepareWorker
+        gen = self._generation_id
+        self._prepare_worker = PrepareWorker(self.pipeline, tab, user_input, routing_plan, trace)
+        self._prepare_worker.progress.connect(
+            lambda text: gen == self._generation_id and self.chat_view.show_researching(text))
+        self._prepare_worker.prepared.connect(
+            lambda prepared: gen == self._generation_id and self._answer_prepared(tab, prepared, trace))
+        self._prepare_worker.failed.connect(
+            lambda err: gen == self._generation_id and self._on_error(err))
+        self._prepare_worker.start()
+
+    def _answer_prepared(self, tab: Tab, prepared, trace):
+        """The prompt is ready: show a clarifying question, or let the speaker talk."""
+        self.chat_view.hide_researching()
         # Images and source names belong to THIS answer (never leftovers)
         self._answer_media = (prepared.images, prepared.sources)
 
@@ -1015,6 +1097,7 @@ class MainWindow(QMainWindow):
 
     def _on_error(self, error: str):
         tracer.discard()
+        self.chat_view.hide_researching()
         self.chat_view.finish_assistant_message()
         self.chat_view.add_error(error)
         self._end_generation()
@@ -1151,6 +1234,9 @@ class MainWindow(QMainWindow):
         if self._training_worker and self._training_worker.isRunning():
             self._training_worker.terminate()
             self._training_worker.wait(500)
+        # The library step can't be cut mid-request; its result is ignored
+        # (the generation id moved on) and it finishes in the background
+        self.chat_view.hide_researching()
         tracer.discard()
 
         # Clear TTS queue and stop speech
@@ -1322,7 +1408,7 @@ class MainWindow(QMainWindow):
         self._sidebar_btn.setChecked(not visible)
         if PHONE_LAYOUT:
             # Phone: Info swaps the chat for the situation panel
-            self.chat_view.setVisible(visible)
+            self._chat_pane.setVisible(visible)
             self.input_bar.setVisible(visible)
             self._sidebar_btn.setText("Chat" if not visible else "Info")
 

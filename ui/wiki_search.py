@@ -136,7 +136,7 @@ class WikiSearchWidget(QWidget):
     # ── States ─────────────────────────────────────────────────────────────
 
     def _show_start(self):
-        n = wiki_lookup.article_count() if wiki_lookup.WIKI_DIR.is_dir() else 0
+        n = wiki_lookup.article_count()
         if n and wiki_lookup.full_text_ready():
             self._count.setText(f"{n:,} articles")
             self._text.setHtml(
@@ -152,12 +152,11 @@ class WikiSearchWidget(QWidget):
             self._count.setText("")
             self._text.setHtml(
                 "<p><b>Wikipedia isn't set up yet.</b></p>"
-                "<p style='color:#a6a6a6'>Download "
-                "<code>simplewiki-latest-pages-articles.xml.bz2</code> from "
-                "dumps.wikimedia.org/simplewiki/latest/ and run:</p>"
-                "<pre>python ingest.py --wikipedia &lt;that file&gt; --extract-only</pre>"
-                "<p style='color:#a6a6a6'>Extracting takes a few minutes. "
-                "This tab and the chat can use it straight after.</p>")
+                "<p style='color:#a6a6a6'>The 1 million most-linked English articles "
+                "(downloads about 24 GB once; the result is about 10 GB):</p>"
+                "<pre>python ingest.py --download-wikipedia-full</pre>"
+                "<p style='color:#a6a6a6'>Or the smaller Simple English one (about 360 MB):</p>"
+                "<pre>python ingest.py --download-wikipedia --extract-only</pre>")
 
     def focus_search(self):
         self._box.setFocus()

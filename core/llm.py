@@ -45,6 +45,22 @@ def fast_local_url(url: str) -> str:
     return (url or "http://localhost:11434").rstrip("/").replace("://localhost", "://127.0.0.1")
 
 
+def _thinking_off(model: str) -> dict:
+    """
+    Qwen3 and other "thinking" models write a hidden <think> essay before
+    answering unless told not to — wasted time here. Only those models get
+    the switch (Ollama rejects it for models that can't think).
+    """
+    m = (model or "").lower()
+    return {"think": False} if any(k in m for k in ("qwen3", "deepseek-r1", "qwq", "magistral")) else {}
+
+
+def strip_thinking(text: str) -> str:
+    """Remove a <think>…</think> block if a model wrote one anyway."""
+    import re
+    return re.sub(r"<think>.*?</think>\s*", "", text, flags=re.S).lstrip()
+
+
 class LLMEngine:
     def __init__(self, config):
         self.config = config
@@ -119,7 +135,9 @@ class LLMEngine:
     def missing_models(self) -> List[str]:
         """Models the settings ask for that aren't pulled yet."""
         installed = self.list_models()
-        wanted = {self.config.fast_model, self.config.companion_model}
+        wanted = {self.config.speaker_model}
+        if self.config.two_models:
+            wanted.add(self.config.librarian_model)
         return sorted(m for m in wanted if m and not self._has_model(installed, m))
 
     def model_available(self) -> bool:
@@ -135,16 +153,16 @@ class LLMEngine:
         on_error: Callable[[str], None],
         tab_id: str = "",
         intent: str = "",
+        model: str = "",
     ):
         """
-        Stream tokens from the model.
-        Uses companion_model for the prometheus tab,
-        fast_model for everything else.
+        Stream tokens from the speaker (the model that talks to you).
         Temperature varies by intent — lower for safety-critical,
         higher for conversation and reflection.
         """
-        model = self.config.model_for_tab(tab_id) if tab_id else self.config.fast_model
+        model = model or self.config.model_for_tab(tab_id)
         temperature = INTENT_TEMPERATURE.get(intent, DEFAULT_TEMPERATURE)
+        in_think = False      # inside a <think> block a model wrote anyway
 
         try:
             payload = {
@@ -154,6 +172,7 @@ class LLMEngine:
                 ] + messages,
                 "stream": True,
                 "keep_alive": self.config.keep_alive,
+                **_thinking_off(model),
                 "options": {
                     "num_ctx":     self.config.context_window,
                     "num_predict": self.config.max_tokens,
@@ -181,6 +200,10 @@ class LLMEngine:
                         try:
                             data = json.loads(line)
                             token = data.get("message", {}).get("content", "")
+                            # Hide a <think>…</think> block if one comes through anyway
+                            if token and (in_think or ("<think>" in token and not full_response.strip())):
+                                in_think = "</think>" not in token
+                                token = token.split("</think>", 1)[1].lstrip() if "</think>" in token else ""
                             if token:
                                 full_response += token
                                 on_token(token)
@@ -209,17 +232,18 @@ class LLMEngine:
         except Exception as e:
             on_error(f"Error: {str(e)}")
 
-    def warm_up(self, system_prompt: str = "", tab_id: str = "prometheus"):
+    def warm_up(self, system_prompt: str = "", tab_id: str = "prometheus", model: str = ""):
         """
         Load the model and read the companion prompt once, at startup, so the
         first real message doesn't pay for it. Ollama keeps the prompt it just
         read, so a message that starts with the same text skips re-reading it.
         Blocking — run it on a background thread.
         """
-        model = self.config.model_for_tab(tab_id)
+        model = model or self.config.model_for_tab(tab_id)
         try:
             requests.post(f"{self.base_url}/api/chat", json={
                 "model": model,
+                **_thinking_off(model),
                 "messages": ([{"role": "system", "content": system_prompt}] if system_prompt else [])
                             + [{"role": "user", "content": "hi"}],
                 "stream": False,
@@ -238,6 +262,7 @@ class LLMEngine:
         temperature: float = 0.2,
         max_tokens: int = 700,
         timeout: int = 90,
+        model: str = "",
     ) -> str:
         """
         Blocking, non-streamed completion.
@@ -245,7 +270,7 @@ class LLMEngine:
         before it can check it. Raises on connection or HTTP errors
         so the caller can fall back to the Knowledge Path.
         """
-        model = self.config.model_for_tab(tab_id) if tab_id else self.config.fast_model
+        model = model or self.config.model_for_tab(tab_id)
         payload = {
             "model": model,
             "messages": [
@@ -254,6 +279,7 @@ class LLMEngine:
             ],
             "stream": False,
             "keep_alive": self.config.keep_alive,
+            **_thinking_off(model),
             "options": {
                 "num_ctx":        self.config.context_window,
                 "num_predict":    max_tokens,
@@ -264,7 +290,7 @@ class LLMEngine:
         }
         r = requests.post(f"{self.base_url}/api/chat", json=payload, timeout=timeout)
         r.raise_for_status()
-        return r.json().get("message", {}).get("content", "")
+        return strip_thinking(r.json().get("message", {}).get("content", ""))
 
     def summarize(self, conversation_text: str) -> str:
         """
@@ -275,7 +301,7 @@ class LLMEngine:
         """
         try:
             payload = {
-                "model": self.config.fast_model,
+                "model": self.config.librarian_model or self.config.fast_model,
                 "messages": [{
                     "role": "user",
                     "content": (

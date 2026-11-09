@@ -192,12 +192,34 @@ class SettingsDialog(QDialog):
         self._refresh_user_fields()
 
     def _build_assistant_tab(self) -> QWidget:
-        """What the assistant is called and how it comes across."""
+        """
+        Who's talking: pick a voice, and give that voice its own name and
+        personality. Each voice remembers its own; switching voices here
+        brings back that voice's name and personality.
+        """
         from PySide6.QtWidgets import QPlainTextEdit
+        import copy
         w = QWidget()
         form = QFormLayout(w)
         form.setSpacing(12)
 
+        # Step 1: the voice (from voices/ — one folder per character)
+        self._profiles = copy.deepcopy(self.config.voice_profiles)
+        self._voice_combo = QComboBox()
+        from core.voice_manager import VoiceManager
+        voices = VoiceManager().all_voices()
+        if voices:
+            for v in voices:
+                self._voice_combo.addItem(v.name)
+            idx = self._voice_combo.findText(self.config.tts_voice)
+            self._voice_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        else:
+            self._voice_combo.addItem("No voices found")
+            self._voice_combo.setEnabled(False)
+        form.addRow("Voice:", self._voice_combo)
+        self._shown_voice = self._current_voice()
+
+        # Step 2: that voice's name and personality
         self._assistant_name = QLineEdit(self.config.assistant_name or "Prometheus")
         self._assistant_name.setPlaceholderText("Prometheus")
         self._assistant_name.setMaxLength(40)
@@ -205,22 +227,44 @@ class SettingsDialog(QDialog):
 
         self._assistant_persona = QPlainTextEdit(self.config.assistant_persona or "")
         self._assistant_persona.setPlaceholderText(
-            "How it comes across — leave empty for a plain, easy-going friend.\n"
+            "How this voice comes across — leave empty for a plain, easy-going friend.\n"
             "e.g. a calm old sailor who's seen a lot and doesn't rush you\n"
             "e.g. dry sense of humour, straight talker, loves a tangent"
         )
         self._assistant_persona.setFixedHeight(96)
         form.addRow("Personality:", self._assistant_persona)
+        self._voice_combo.currentTextChanged.connect(self._swap_profile)
 
         note = QLabel(
-            "The name shows in the header and on the chat tab, and the model uses it.\n"
-            "Personality shapes the chat tab. Knowledge tabs stay factual."
+            "Each voice keeps its own name and personality.\n"
+            "The name shows in the header and on the chat tab. Personality shapes\n"
+            "how it talks to you; library answers stay factual."
         )
         note.setObjectName("noteLabel")
         from PySide6.QtWidgets import QSizePolicy
         note.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         form.addRow(note)
         return w
+
+    def _current_voice(self) -> str:
+        return self._voice_combo.currentText() if self._voice_combo.isEnabled() else ""
+
+    def _keep_profile(self):
+        """The fields as typed → the profile of the voice they belong to."""
+        if self._shown_voice:
+            self._profiles[self._shown_voice] = {
+                "name": self._assistant_name.text().strip() or "Prometheus",
+                "persona": self._assistant_persona.toPlainText().strip()}
+
+    def _swap_profile(self, voice: str):
+        """Voice changed: keep what was typed for the old one, show the new one's."""
+        self._keep_profile()
+        self._shown_voice = voice
+        prof = self._profiles.get(voice)
+        if prof:
+            self._assistant_name.setText(prof.get("name") or "Prometheus")
+            self._assistant_persona.setPlainText(prof.get("persona", ""))
+        # a voice with no profile yet starts from what's showing — edit it from there
 
     def _build_model_tab(self) -> QWidget:
         """
@@ -237,12 +281,20 @@ class SettingsDialog(QDialog):
         self._ollama_url.setPlaceholderText("http://localhost:11434")
         form.addRow("Ollama address:", self._ollama_url)
 
-        # Pick from what Ollama has installed — no typing
-        self._fast_model = QComboBox()
-        form.addRow("Knowledge tabs model:", self._fast_model)
+        # Pick from what Ollama has installed — no typing.
+        # Two models work together: the speaker talks to you; the librarian
+        # only reads the library and passes the speaker the facts.
+        self._fast_model = QComboBox()            # the speaker
+        form.addRow("Speaker (talks to you):", self._fast_model)
 
-        self._companion_model = QComboBox()
-        form.addRow("Chat tab model:", self._companion_model)
+        self._companion_model = QComboBox()       # the librarian
+        form.addRow("Librarian (reads the library):", self._companion_model)
+
+        self._two_models = QCheckBox("Use the librarian (the speaker only states facts it found)")
+        self._two_models.setChecked(self.config.two_models)
+        self._two_models.toggled.connect(self._companion_model.setEnabled)
+        self._companion_model.setEnabled(self.config.two_models)
+        form.addRow(self._two_models)
 
         row = QHBoxLayout()
         refresh = QPushButton("Check Ollama")
@@ -274,7 +326,7 @@ class SettingsDialog(QDialog):
         else:
             where = ("The lists show the models installed in Ollama. To keep them in\n"
                      "the prometheus folder instead:  python -m core.ollama_local --move")
-        note = QLabel(where + "\nThe chat tab can use a different model from the knowledge tabs.")
+        note = QLabel(where + "\nSuggested: speaker qwen3:1.7b, librarian LFM2.5 1.2B.")
         note.setObjectName("noteLabel")
         form.addRow(note)
 
@@ -294,8 +346,8 @@ class SettingsDialog(QDialog):
         from core.config import Config as _C
         from PySide6.QtCore import QThread, Signal
 
-        current = (self._fast_model.currentData() or self.config.fast_model,
-                   self._companion_model.currentData() or self.config.companion_model)
+        current = (self._fast_model.currentData() or self.config.speaker_model,
+                   self._companion_model.currentData() or self.config.librarian_model)
 
         # Step 1
         self._ollama_status.setText("Checking Ollama…")
@@ -371,35 +423,14 @@ class SettingsDialog(QDialog):
         self._stt_enabled.setChecked(self.config.stt_enabled)
         form.addRow(self._stt_enabled)
 
-        # Voice selector — populated from voices/ folder
-        self._voice_combo = QComboBox()
-        from core.voice_manager import VoiceManager
-        vm = VoiceManager()
-        voices = vm.all_voices()
-
-        if voices:
-            for v in voices:
-                self._voice_combo.addItem(v.name)
-            # Select current voice
-            current = self.config.tts_voice
-            idx = self._voice_combo.findText(current)
-            if idx >= 0:
-                self._voice_combo.setCurrentIndex(idx)
-            else:
-                self._voice_combo.setCurrentIndex(0)
-        else:
-            self._voice_combo.addItem("No voices found")
-            self._voice_combo.setEnabled(False)
-
-        form.addRow("Voice character:", self._voice_combo)
-
         self._stt_model = QComboBox()
         self._stt_model.addItems(["tiny", "base", "small", "medium"])
         self._stt_model.setCurrentText(self.config.stt_model)
         form.addRow("Whisper model:", self._stt_model)
 
         # Status note
-        status = vm.status_summary()
+        from core.voice_manager import VoiceManager
+        status = VoiceManager().status_summary()
         note = QLabel(
             f"{status}\n\n"
             "Add voices by placing each character in its own\n"
@@ -465,14 +496,20 @@ class SettingsDialog(QDialog):
     def _save_rest(self):
 
         # Save model settings
-        fast = (self._fast_model.currentData() or self.config.fast_model).strip()
-        self.config.fast_model      = fast
-        self.config.llm_model       = fast      # summaries and checks use the same model
-        self.config.companion_model = (self._companion_model.currentData() or fast).strip()
+        speaker = (self._fast_model.currentData() or self.config.speaker_model).strip()
+        self.config.speaker_model   = speaker
+        self.config.librarian_model = (self._companion_model.currentData()
+                                       or self.config.librarian_model).strip()
+        self.config.two_models      = self._two_models.isChecked()
 
         # Assistant
-        self.config.assistant_name    = self._assistant_name.text().strip() or "Prometheus"
-        self.config.assistant_persona = self._assistant_persona.toPlainText().strip()
+        # Assistant: every voice's profile, then switch to the chosen voice
+        self._keep_profile()
+        self.config.voice_profiles = self._profiles
+        voice = self._current_voice()
+        self.config.store_profile(voice, self._assistant_name.text().strip(),
+                                  self._assistant_persona.toPlainText().strip())
+        self.config.use_voice(voice or self.config.tts_voice)
         self.config.ollama_url      = self._ollama_url.text().strip() or "http://localhost:11434"
         self.config.max_tokens = self._max_tokens.value()
         self.config.rag_results = self._rag_results.value()
@@ -480,7 +517,6 @@ class SettingsDialog(QDialog):
         # Save voice settings
         self.config.voice_enabled = self._voice_enabled.isChecked()
         self.config.stt_enabled   = self._stt_enabled.isChecked()
-        self.config.tts_voice     = self._voice_combo.currentText()
         self.config.stt_model     = self._stt_model.currentText()
 
         self.accept()

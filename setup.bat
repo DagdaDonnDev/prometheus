@@ -68,23 +68,26 @@ if errorlevel 1 (
 )
 echo [OK] Ollama installed
 
-REM -- Step 4: model --------------------------------------------
-REM The model is kept in prometheus\models (not your user folder).
-REM Step 4a: already downloaded into Ollama's usual folder? Move it here.
-REM Step 4b: otherwise download it straight into prometheus\models.
-set "MODEL=hf.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF:latest"
+REM -- Step 4: models ---------------------------------------------
+REM Two models, kept in prometheus\models (not your user folder):
+REM   speaker   qwen3:1.7b  - talks to you            (about 1.4 GB)
+REM   librarian LFM2.5 1.2B - reads the library only  (about 730 MB)
+REM Step 4a: already downloaded into Ollama's usual folder? Move them here.
+REM Step 4b: otherwise download them straight into prometheus\models.
 %PY% -m core.ollama_local --move
-%PY% -m core.ollama_local --has %MODEL%
-if errorlevel 1 (
-    echo [..] Downloading LFM2.5 1.2B Instruct into prometheus\models - about 730 MB, first time only
-    %PY% -m core.ollama_local --pull %MODEL%
+for %%M in (qwen3:1.7b hf.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF:latest) do (
+    %PY% -m core.ollama_local --has %%M
     if errorlevel 1 (
-        echo [X] Model download failed. Check your internet connection and run this again.
-        pause
-        exit /b 1
+        echo [..] Downloading %%M into prometheus\models - first time only
+        %PY% -m core.ollama_local --pull %%M
+        if errorlevel 1 (
+            echo [X] Model download failed. Check your internet connection and run this again.
+            pause
+            exit /b 1
+        )
     )
 )
-echo [OK] Model ready in prometheus\models
+echo [OK] Models ready in prometheus\models
 
 REM -- Step 5: requirements -------------------------------------
 echo [..] Installing Python packages

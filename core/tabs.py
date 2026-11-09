@@ -439,6 +439,14 @@ DEFAULT_TABS = [
         domains=[],   # P2P tab — no RAG search
         system_prompt="",
     ),
+    # Review: what you've said about yourself, waiting for you to confirm (not a chat)
+    Tab(
+        id="review",
+        name="Review",
+        icon="✓",
+        domains=[],
+        system_prompt="",
+    ),
 ]
 
 
