@@ -260,6 +260,12 @@ Decision layers live in `core/answers/pipeline.py` (`QueryPipeline`, no Qt). The
 - `ollama_local.find_ollama` prefers prometheus/ollama. Prometheus.bat/prometheus.sh committed;
   setup.bat + debug_run.bat prefer runtime\python. runtime/ and ollama/ gitignored + APK-excluded.
 - python.org and bootstrap.pypa.io are blocked in the sandbox: the Python step is untested here.
+- Owner's limit: must fit a 16 GB SD/USB → `LIMIT_GIB = 14` checked in step_report (GiB, as Windows
+  shows). Owner's sizes (2026-11-09): ollama 6.3, models 2.16, knowledge_base 1.93, voices 0.69 GB.
+- GPU libs: kept ALL by default (owner: the next PC may have a different card); `--gpu nvidia|amd|
+  intel|none|auto` → `trim_ollama` removes cuda*/rocm*/hip* dirs of other makers, keeps vulkan + CPU.
+  `show_gpu_libs()` lists sizes. Python step resumes when runtime exists without PySide6
+  (`_has_packages`); launchers use runtime only if `Lib\site-packages\PySide6` (setup.bat: `pip`) exists.
 
 ## Icon
 - `assets/icon.png` (owner's design: open hand, flame above, navy square). main.py setWindowIcon +

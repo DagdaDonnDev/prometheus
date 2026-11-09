@@ -8,7 +8,11 @@ Make the prometheus folder self-contained — copy it to another computer
 Step 1  AI models      both models (speaker + librarian) → prometheus/models
                        (moved from Ollama's usual folder; nothing re-downloaded)
 Step 2  Ollama         the Ollama program → prometheus/ollama
-                       (Prometheus uses this copy first; your installed one is untouched)
+                       (Prometheus uses this copy first; your installed one is untouched).
+                       Ollama ships GPU libraries for NVIDIA and AMD cards. All are kept by
+                       default, so the folder works on whatever card the next PC has; the
+                       sizes are listed. --gpu <maker> keeps only one maker's (Vulkan, which
+                       works on any card, and the CPU files always stay).
 Step 3  Voice          Piper → prometheus/piper; the Whisper model → prometheus/models/whisper
 Step 4  Python         Windows: Python's official portable build → prometheus/runtime/python,
                        with every package Prometheus needs installed into it (needs
@@ -56,6 +60,14 @@ def _size(path: Path) -> int:
     return sum(f.stat().st_size for f in path.rglob("*") if f.is_file()) if path.exists() else 0
 
 
+LIMIT_GIB = 14      # a 16 GB card holds ~14.5 GB as Windows counts it
+
+
+def _gib(n: int) -> str:
+    """Size as Windows Explorer shows it (1 GB = 1024³ bytes)."""
+    return f"{n / 2**30:.1f} GB"
+
+
 def _gb(n: int) -> str:
     return f"{n / 1e9:.1f} GB" if n >= 1e9 else f"{n / 1e6:.0f} MB"
 
@@ -101,11 +113,74 @@ def _ollama_install(exe: Path):
     return None, None                                    # Linux: binary + ../lib/ollama, handled below
 
 
-def step_ollama(check: bool) -> bool:
+def detect_gpu() -> str:
+    """'nvidia', 'amd', 'intel' or 'none' — the graphics card Ollama will use here."""
+    if shutil.which("nvidia-smi"):
+        return "nvidia"
+    names = ""
+    try:
+        if os.name == "nt":
+            names = subprocess.run(["powershell", "-NoProfile", "-Command",
+                                    "(Get-CimInstance Win32_VideoController).Name"],
+                                   capture_output=True, text=True, timeout=20).stdout
+        elif shutil.which("lspci"):
+            names = subprocess.run(["lspci"], capture_output=True, text=True, timeout=20).stdout
+    except Exception:
+        pass
+    low = names.lower()
+    for key, vendor in (("nvidia", "nvidia"), ("radeon", "amd"), ("amd", "amd"), ("intel", "intel")):
+        if key in low:
+            return vendor
+    return "none"
+
+
+# GPU library folders Ollama ships, by maker. Vulkan works on any card and is
+# always kept as the fallback; the CPU files are always kept.
+_GPU_LIBS = {"nvidia": ("cuda",), "amd": ("rocm", "hip")}
+
+
+def trim_ollama(gpu: str) -> int:
+    """
+    Remove the GPU libraries this computer's card can't use (e.g. AMD's on an
+    NVIDIA PC). Returns bytes freed. gpu='all' keeps everything.
+    """
+    if gpu == "all" or not OLLAMA_DIR.is_dir():
+        return 0
+    drop = [prefix for maker, prefixes in _GPU_LIBS.items() if maker != gpu for prefix in prefixes]
+    freed = 0
+    for d in sorted(OLLAMA_DIR.rglob("*")):
+        if d.is_dir() and d.exists() and any(d.name.lower().startswith(x) for x in drop):
+            size = _size(d)
+            shutil.rmtree(d, ignore_errors=True)
+            freed += size
+            info(f"removed {d.relative_to(ROOT)} ({_gb(size)}) — not used with this card")
+    return freed
+
+
+def show_gpu_libs():
+    """The size of each graphics-card library Ollama has (where its gigabytes go)."""
+    rows = []
+    for d in OLLAMA_DIR.rglob("*"):
+        if d.is_dir() and any(d.name.lower().startswith(x) for x in ("cuda", "rocm", "hip", "vulkan")):
+            rows.append((_size(d), d))
+    for size, d in sorted(rows, reverse=True):
+        kind = ("NVIDIA" if d.name.lower().startswith("cuda") else
+                "AMD" if d.name.lower().startswith(("rocm", "hip")) else "any card")
+        print(f"     {_gb(size):>8}  {d.relative_to(ROOT)}  ({kind})")
+    if rows:
+        print(f"     This PC's card: {detect_gpu()}. To keep only one kind:  "
+              "python tools/make_portable.py --gpu nvidia   (or amd / intel)")
+
+
+def step_ollama(check: bool, gpu: str = "all") -> bool:
     from core.ai import ollama_local as ol
+    gpu = detect_gpu() if gpu == "auto" else gpu
     exe = ol.find_ollama()
     if exe and _inside(exe):
-        ok(f"Ollama is in the folder ({Path(exe).relative_to(ROOT)})")
+        freed = 0 if check else trim_ollama(gpu)
+        ok(f"Ollama is in the folder ({_gb(_size(OLLAMA_DIR))})"
+           + (f" — {_gb(freed)} freed" if freed else ""))
+        show_gpu_libs()
         return True
     if not exe:
         bad("Ollama isn't installed here — install it (ollama.com/download), then run this again")
@@ -125,6 +200,7 @@ def step_ollama(check: bool) -> bool:
         libs = exe.parent.parent / "lib" / "ollama"
         if libs.is_dir():
             shutil.copytree(libs, OLLAMA_DIR / "lib" / "ollama", dirs_exist_ok=True)
+    trim_ollama(gpu)
     copied = ol.find_ollama()
     if not copied or not _inside(copied):
         bad("Copied, but Prometheus can't find Ollama in the folder")
@@ -135,6 +211,7 @@ def step_ollama(check: bool) -> bool:
     except Exception:
         version = []
     ok(f"Ollama copied ({_gb(_size(OLLAMA_DIR))}){' — ' + version[0] if version else ''}")
+    show_gpu_libs()
     return True
 
 
@@ -223,12 +300,16 @@ def step_python(check: bool) -> bool:
            "--find-links wheels -r requirements.txt")
         return True
 
-    if exe.exists():
-        ok("Portable Python is in the folder (runtime\\python)")
+    if exe.exists() and _has_packages():
+        ok(f"Portable Python is in the folder with its packages ({_gb(_size(RUNTIME))})")
         return True
     if check:
-        warn("Python and its packages are outside the folder")
+        warn("Portable Python is only half set up (no packages yet)" if exe.exists()
+             else "Python and its packages are outside the folder")
         return False
+    if exe.exists():
+        info("Portable Python is there but its packages aren't — finishing the setup")
+        return _install_packages(exe)
 
     # Step 4a: Python's portable build, the same version as this one if it has one
     arch = "arm64" if platform.machine().lower() in ("arm64", "aarch64") else "amd64"
@@ -248,14 +329,27 @@ def step_python(check: bool) -> bool:
     zipfile.ZipFile(io.BytesIO(data)).extractall(RUNTIME)
     enable_site_packages(RUNTIME)
 
-    # Step 4b: pip, then every package in requirements.txt
+    return _install_packages(exe)
+
+
+def _has_packages() -> bool:
+    """The portable Python has what Prometheus needs to start."""
+    return (RUNTIME / "Lib" / "site-packages" / "PySide6").is_dir()
+
+
+def _install_packages(exe: Path) -> bool:
+    """Step 4b: pip, then every package in requirements.txt (safe to run again)."""
+    enable_site_packages(RUNTIME)
+    has_pip = (RUNTIME / "Lib" / "site-packages" / "pip").is_dir()
     try:
-        (RUNTIME / "get-pip.py").write_bytes(_download("https://bootstrap.pypa.io/get-pip.py"))
+        if not has_pip:
+            (RUNTIME / "get-pip.py").write_bytes(_download("https://bootstrap.pypa.io/get-pip.py"))
     except Exception as e:
         bad(f"Couldn't download pip ({e})")
         return False
-    if subprocess.call([str(exe), str(RUNTIME / "get-pip.py"), "--no-warn-script-location"]):
-        bad("pip didn't install into the portable Python")
+    if not has_pip and subprocess.call([str(exe), str(RUNTIME / "get-pip.py"), "--no-warn-script-location"]):
+        bad("pip didn't install into the portable Python — run this again; if it keeps "
+            "failing, send the lines above")
         return False
     info("Installing Prometheus's packages into it (a few GB, several minutes)…")
     if subprocess.call([str(exe), "-m", "pip", "install", "--no-warn-script-location",
@@ -274,11 +368,12 @@ def step_python(check: bool) -> bool:
 # ── Step 5 ──────────────────────────────────────────────────────────────────
 
 LAUNCH_BAT = r"""@echo off
-REM Start Prometheus with what's inside this folder (made by tools/make_portable.py).
-REM Uses runtime\python if it's there, otherwise the Python on this computer.
+REM Start Prometheus with what's inside this folder (made by tools\make_portable.py).
+REM Uses runtime\python if it's set up (its packages installed), otherwise the
+REM Python on this computer.
 cd /d "%~dp0"
 set PYTHONUTF8=1
-if exist "runtime\python\pythonw.exe" (
+if exist "runtime\python\Lib\site-packages\PySide6\" (
     start "" "runtime\python\pythonw.exe" main.py %*
 ) else (
     python main.py %*
@@ -318,13 +413,29 @@ def step_report():
              "again in Settings → Obsidian on the new machine")
     if setup_dir().is_dir() and not _inside(setup_dir()):
         info(f"{setup_dir()} (downloads, sources) isn't needed to run — leave it or copy it, either way")
-    print(f"\nThe prometheus folder is {_gb(_size(ROOT))}.")
+    # Step 6b: does it fit a 16 GB SD card / USB stick? Those hold about
+    # 14.5 GB as Windows counts it, so 14 GB is the line.
+    total = _size(ROOT)
+    print(f"\nThe prometheus folder is {_gib(total)}.")
+    if total > LIMIT_GIB * 2**30:
+        warn(f"That's over {LIMIT_GIB} GB — it won't fit a 16 GB SD card or USB stick. Biggest parts:")
+        parts = sorted(((_size(d), d.name) for d in ROOT.iterdir() if d.is_dir()), reverse=True)[:5]
+        for size, name in parts:
+            print(f"     {_gib(size):>8}  {name}")
+        print("     Ways to shrink it: --gpu nvidia (or amd) keeps one graphics card's libraries;\n"
+              "     fewer voices in voices\\; delete knowledge_base\\wikipedia_full.sqlite if present.")
+    else:
+        ok(f"Fits a 16 GB SD card or USB stick ({_gib(LIMIT_GIB * 2**30 - total)} to spare under {LIMIT_GIB} GB)")
 
 
 def main() -> int:
     check = "--check" in sys.argv
+    gpu = "all"                          # portable: every graphics card keeps working
+    if "--gpu" in sys.argv:              # --gpu nvidia|amd|intel|none|auto|all
+        i = sys.argv.index("--gpu")
+        gpu = sys.argv[i + 1].lower() if i + 1 < len(sys.argv) else "all"
     print(f"{'Checking' if check else 'Gathering everything into'} {ROOT}\n")
-    results = [step_models(check), step_ollama(check), step_voice(check), step_python(check)]
+    results = [step_models(check), step_ollama(check, gpu), step_voice(check), step_python(check)]
     step_launchers(check)
     step_report()
     if all(results):

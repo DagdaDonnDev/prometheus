@@ -75,6 +75,42 @@ class TestPortable(unittest.TestCase):
         self.assertEqual(ol.find_ollama(), str(self.root / "ollama" / "bin" / "ollama"))
         self.assertTrue(mp.step_ollama(check=True))
 
+    def _gpu_libs(self):
+        lib = self.root / "ollama" / "lib" / "ollama"
+        for name in ("cuda_v12", "cuda_v13", "rocm", "vulkan"):
+            (lib / name).mkdir(parents=True)
+            (lib / name / "x.dll").write_bytes(b"x" * 100)
+        (lib / "ggml-cpu.dll").write_bytes(b"c")
+        return lib
+
+    def test_every_graphics_card_kept_by_default(self):
+        lib = self._gpu_libs()
+        self.assertEqual(mp.trim_ollama("all"), 0)
+        self.assertEqual(sorted(p.name for p in lib.iterdir()),
+                         ["cuda_v12", "cuda_v13", "ggml-cpu.dll", "rocm", "vulkan"])
+
+    def test_trim_to_one_maker_keeps_vulkan_and_cpu(self):
+        lib = self._gpu_libs()
+        self.assertEqual(mp.trim_ollama("nvidia"), 100)
+        self.assertEqual(sorted(p.name for p in lib.iterdir()),
+                         ["cuda_v12", "cuda_v13", "ggml-cpu.dll", "vulkan"])
+        mp.trim_ollama("intel")                                       # neither NVIDIA nor AMD
+        self.assertEqual(sorted(p.name for p in lib.iterdir()), ["ggml-cpu.dll", "vulkan"])
+
+    def test_half_set_up_python_is_finished_not_skipped(self):
+        rt = self.root / "runtime" / "python"
+        rt.mkdir(parents=True)
+        (rt / "python.exe").write_bytes(b"")
+        with mock.patch.object(mp, "RUNTIME", rt), mock.patch.object(mp.os, "name", "nt"), \
+                mock.patch.object(mp, "_install_packages", return_value=True) as install:
+            self.assertFalse(mp.step_python(check=True))                 # reported, not "ok"
+            self.assertTrue(mp.step_python(check=False))
+            install.assert_called_once()
+            (rt / "Lib" / "site-packages" / "PySide6").mkdir(parents=True)
+            install.reset_mock()
+            self.assertTrue(mp.step_python(check=False))
+            install.assert_not_called()
+
     def test_piper_and_whisper_come_in(self):
         from core.voice import voice_manager
         from core.app import paths

@@ -147,6 +147,17 @@ and don't depend on where the folder is. On the new computer just run
 **`Prometheus.bat`** (or `./prometheus.sh`) — no installing. `setup.bat` and
 `debug_run.bat` use the folder's Python too. Expect the folder to be several GB.
 
+**Size.** It's meant to fit a 16 GB SD card or USB stick (about 14.5 GB as
+Windows counts it), so `make_portable` ends by checking the folder is under
+14 GB and, if not, lists the biggest parts. The largest is usually `ollama\`:
+Ollama brings graphics-card libraries for both NVIDIA and AMD so the folder
+works on any PC; the sizes are listed. If you know which card it'll run on,
+`python tools/make_portable.py --gpu nvidia` (or `amd`, `intel`) keeps only that
+one's — other cards then fall back to the slower Vulkan or CPU versions, which
+are always kept. Running it again finishes anything left half-done (for
+example the Python packages after a dropped connection). Format the stick
+exFAT (FAT32 can't hold files over 4 GB).
+
 Not copied: an Obsidian vault elsewhere (copy it and set it again in
 Settings → Obsidian), and `prometheus_setup` (downloads and sources — the app
 doesn't need it).

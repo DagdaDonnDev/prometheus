@@ -25,7 +25,7 @@ REM Prefer "python" - the same one you'd type to run Prometheus later.
 REM ("py" can open a different install, so packages would land elsewhere.)
 set "PY="
 REM The portable Python inside this folder comes first (tools\make_portable.py)
-if exist "runtime\python\python.exe" set "PY=runtime\python\python.exe"
+if exist "runtime\python\Lib\site-packages\pip\" set "PY=runtime\python\python.exe"
 if not defined PY ( where python >nul 2>nul && set "PY=python" )
 if not defined PY ( where py >nul 2>nul && set "PY=py -3" )
 if not defined PY (

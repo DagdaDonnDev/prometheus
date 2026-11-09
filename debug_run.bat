@@ -23,7 +23,7 @@ REM ("py" can open a different install than "python" - e.g. a fresh 3.14
 REM from the Python install manager with nothing in it.)
 set "PY="
 REM The portable Python inside this folder comes first (tools\make_portable.py)
-if exist "runtime\python\python.exe" set "PY=runtime\python\python.exe"
+if exist "runtime\python\Lib\site-packages\PySide6\" set "PY=runtime\python\python.exe"
 for %%P in ("python" "py -3" "python3") do (
   if not defined PY (
     %%~P -c "import PySide6, requests" >nul 2>nul && set "PY=%%~P"

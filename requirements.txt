@@ -2,7 +2,7 @@
 # Install with: pip install -r requirements.txt
 
 # UI
-PySide6>=6.6.0
+PySide6-Essentials>=6.6.0   # Qt Core, Gui, Widgets, Network — all Prometheus uses (the full PySide6 adds ~0.4 GB of extras)
 
 # LLM (Ollama runs separately - install from ollama.ai)
 requests>=2.31.0
