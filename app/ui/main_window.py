@@ -1114,7 +1114,8 @@ class MainWindow(QMainWindow):
         # context rides with the newest message, so the model only has to
         # read what's new (see pipeline.with_turn_context)
         from core.answers.pipeline import with_turn_context
-        messages = with_turn_context(self.context_mgr.messages_for(tab), prepared.turn_context)
+        reserve = len(prepared.system_prompt or "") + len(prepared.turn_context or "")
+        messages = with_turn_context(self.context_mgr.messages_for(tab, reserve), prepared.turn_context)
         import time as _time
         trace.prep_ms = int((_time.time() - trace.timestamp) * 1000)
         self.llm.last_stats = {}
@@ -1176,6 +1177,12 @@ class MainWindow(QMainWindow):
         self._learned_note = ""
         self.status_bar.showMessage(note, 8000 if note else 0)
         self._notice_facts(getattr(self, "_last_user_text", ""))
+        # The models kept swapping in and out of the graphics card → say so once
+        if getattr(self.llm, "thrashing", False) and not getattr(self, "_told_thrashing", False):
+            self._told_thrashing = True
+            self.status_bar.showMessage(
+                "Graphics card memory is nearly full (other programs are using it) — "
+                "using one model for now so replies stay quick", 15000)
 
     def _notice_facts(self, text: str):
         """
@@ -1187,7 +1194,7 @@ class MainWindow(QMainWindow):
         import threading
         cfg = self.config
         if not text or not cfg.notice_facts or not cfg.two_models or \
-                getattr(cfg, "low_power_active", False):
+                getattr(cfg, "low_power_active", False) or getattr(self.llm, "thrashing", False):
             return
         from core.you import notice
         if not notice.worth_asking(text):

@@ -173,7 +173,9 @@ def find_pictures(question: str, kb: Path = Path("knowledge_base"), limit: int =
                 if img.exists():
                     found.append(((in_caption, in_text), {
                         "image": str(img), "domain": folder.name, "source": source,
-                        "page": int(page), "shows": caption.split("|")[0].strip().rstrip(".")[:120]}))
+                        "page": int(page), "shows": caption.split("|")[0].strip().rstrip(".")[:120],
+                        # how sure: subject words in its caption/labels, out of how many
+                        "in_caption": in_caption, "wanted": len(want)}))
     found.sort(key=lambda f: f[0], reverse=True)
     return [f[1] for f in found[:limit]]
 

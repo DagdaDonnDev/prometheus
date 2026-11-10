@@ -184,10 +184,77 @@ class TestOwnServer(unittest.TestCase):
             ol.stop()
         ol._use(11435)
 
+    def test_old_ollama_on_our_port_is_stopped(self):
+        # It can sit on graphics-card memory (owner: 1.1 GB free of 8 GB)
+        import shutil as sh
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        (root / "serve").write_text(FAKE_SERVE)
+        fake_ollama = root / "ollama"                       # a process named "ollama"
+        os.symlink(os.path.realpath(sys.executable), fake_ollama)
+        models = root / "models"
+        _model(models, ol.DEFAULT_MODEL, [b"c"])
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        old = subprocess.Popen([str(fake_ollama), str(root / "serve")],
+                               env={**os.environ, "OLLAMA_HOST": f"127.0.0.1:{port}",
+                                    "OLLAMA_MODELS": "elsewhere", "FAKE_NAMES": ""})
+        self.addCleanup(old.kill)
+        for _ in range(40):
+            if ol.answering(f"http://127.0.0.1:{port}"):
+                break
+            time.sleep(0.1)
+        with mock.patch.multiple(ol, MODELS_DIR=models, PORTS=(port,)):
+            done = ol.clear_stale()
+        if not done:
+            self.skipTest("can't see which process holds the port here (no lsof)")
+        self.assertIn(f"port {port}", done[0])
+        old.wait(timeout=5)
+        self.assertIsNotNone(old.poll())
+
+    def test_a_server_that_isnt_ollama_is_left_alone(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        (root / "serve").write_text(FAKE_SERVE)
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        other = subprocess.Popen([sys.executable, str(root / "serve")],
+                                 env={**os.environ, "OLLAMA_HOST": f"127.0.0.1:{port}",
+                                      "OLLAMA_MODELS": "x", "FAKE_NAMES": ""})
+        self.addCleanup(other.kill)
+        for _ in range(40):
+            if ol.answering(f"http://127.0.0.1:{port}"):
+                break
+            time.sleep(0.1)
+        with mock.patch.multiple(ol, PORTS=(port,)):
+            self.assertEqual(ol.clear_stale(), [])
+        self.assertIsNone(other.poll())
+
     def test_not_used_without_local_models(self):
         with tempfile.TemporaryDirectory() as t, mock.patch.object(ol, "MODELS_DIR", Path(t)):
             self.assertFalse(ol.start())
             self.assertEqual(ol.active_url(), "")
+
+
+class TestSwapWatch(unittest.TestCase):
+    def test_two_swaps_mean_one_model(self):
+        from core.ai.llm import LLMEngine
+        from core.ai.librarian import Librarian
+        from core.app.config import Config
+        llm = LLMEngine(Config())
+        lib = Librarian(llm)
+        llm._note_load("qwen3:1.7b", 1400)       # first loads don't count
+        llm._note_load("lfm", 1400)
+        self.assertTrue(lib.enabled())
+        llm._note_load("qwen3:1.7b", 30)          # stayed loaded
+        llm._note_load("lfm", 1700)               # swapped back in
+        self.assertTrue(lib.enabled())
+        llm._note_load("qwen3:1.7b", 1600)
+        self.assertFalse(lib.enabled())           # thrashing: librarian off
 
 
 if __name__ == "__main__":

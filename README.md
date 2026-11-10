@@ -386,7 +386,8 @@ rewrites changed articles and removes deleted ones.
 **In chat:** when a message names something with its own article — a film,
 show, band, book, person, place — its opening paragraph is given to the model
 (by title, in milliseconds), and the reply says *From: Wikipedia — Title*.
-"have you seen inception?" finds *Inception (film)*. Everyday words don't
+"have you seen inception?" finds *Inception (film)*, and "halo the game"
+finds *Halo (series)* (a game can be one title or a whole series). Everyday words don't
 count: "I watched a movie yesterday" pulls in nothing. Never used in the
 Medical tab or for step-by-step/diagnosis questions.
 
@@ -756,7 +757,14 @@ A question that needs the library goes:
    did that every time it went wrong ("hemlock" became "hemlock tree forest")
    and cost half a second. Fillers ("okay", "so", "list", "instructions")
    don't count as the subject; a message with no subject at all ("list 50
-   movies") isn't looked up — the speaker just answers
+   movies") isn't looked up — the speaker just answers. A short message that points
+   back ("what's the story of it?", "the game") is looked up together with
+   your last question, and when the library has nothing new the speaker
+   answers from the conversation so far instead of saying it doesn't know.
+   It's also told what you're following on from. And the chat history is
+   fitted to the model's window: a long chat plus the library passages used
+   to overflow it, and the start of the chat was silently cut off; now the
+   newest messages always fit and the older ones are summarised sooner
 2. the library is searched with those words. Only passages that are actually
    on the subject go further — your one or two key words, or half of three or
    more, must be in them. Nothing on the subject → the librarian isn't asked
@@ -779,7 +787,10 @@ from whatever else the search turned up. Ask for a picture ("show me a picture
 of hemlock") and every on-subject passage with one counts, and the speaker is
 told whether a picture is shown — so it doesn't say "I don't have pictures"
 above one. It describes a picture only by its caption; without one it just says
-it's there (it used to invent what the picture showed).
+it's there (it used to invent what the picture showed). You don't have to ask: when an
+answer is about something a figure's caption names — a plant, a tool, a
+step ("how do I make a bow drill" → "Figure 7. Bow drill") — that picture
+comes with it.
 
 **Its own name.** Ask "who are you", "who are you named after" or about its
 name (even misspelt) and it answers as that name. If the name comes from
@@ -1051,6 +1062,17 @@ installed and loaded models, your settings, everything the app printed
 and what each model said: the speaker's request to the librarian, the facts the
 librarian found (or NOT FOUND, with what it actually wrote), how long the
 librarian took to load, read and write, the reply you got, and any pictures shown.
+It also shows your graphics card's memory and what's using it (NVIDIA cards).
+
+**Graphics card too full for both models.** The speaker and the librarian need
+about 2.7 GB of graphics memory together. If other programs leave less than
+that, Ollama keeps unloading one model to load the other — 1.5–3 s every step,
+and most of each model runs on the processor. Prometheus notices this (a model
+that has to be loaded again) and uses one model for the rest of that run; the
+status bar says so. To get both back, close what's using the card (Task
+Manager → Performance → GPU shows how much is used). An Ollama left over on
+Prometheus's own ports from an earlier run is stopped at start, since it can
+hold graphics memory too.
 It also says which Ollama program is used, whether every model file is in
 `app\models`, which Ollama is running on Prometheus's ports (and whether it's
 the one reading your models), and the last lines Prometheus's own Ollama

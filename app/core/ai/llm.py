@@ -222,6 +222,7 @@ class LLMEngine:
                                     "gen_tokens":     int(data.get("eval_count", 0) or 0),
                                     "gen_ms":         ns("eval_duration"),
                                 }
+                                self._note_load(model, self.last_stats["load_ms"])
                                 on_done(full_response)
                                 return
 
@@ -304,7 +305,23 @@ class LLMEngine:
             "gen_tokens": int(data.get("eval_count", 0) or 0),
             "gen_ms": ns("eval_duration"),
         }
+        self._note_load(model, self.last_complete_stats["load_ms"])
         return strip_thinking(data.get("message", {}).get("content", ""))
+
+    # Swap watch. The owner's card had 1.1 GB free of 8 GB (other programs);
+    # the two models need ~2.7 GB together, so Ollama unloaded one to load the
+    # other on EVERY step — 1.5–3 s each, most layers on the processor.
+    # A model that was already loaded once and needs loading again (>0.7 s)
+    # is a swap; two swaps → `thrashing`: one model for the rest of the run.
+    SWAP_MS = 700
+
+    def _note_load(self, model: str, load_ms: int):
+        seen = self.__dict__.setdefault("_loaded_once", set())
+        if model in seen and load_ms > self.SWAP_MS:
+            self.swaps = getattr(self, "swaps", 0) + 1
+            if self.swaps >= 2:
+                self.thrashing = True
+        seen.add(model)
 
     def summarize(self, conversation_text: str) -> str:
         """

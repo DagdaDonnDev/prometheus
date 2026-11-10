@@ -81,6 +81,18 @@ def last_reply(tab) -> str:
     return replies[-1] if replies else ""
 
 
+# Words that point back at what was just being talked about
+_LEANS_BACK = re.compile(r"\b(it|its|it's|they|them|their|theirs|he|him|his|she|her|hers|that|this|"
+                         r"those|these|one|ones|more|story|lore|plot|ending|sequel|sequels|else|"
+                         r"too|also|same|another)\b", re.I)
+
+
+def leans_on_last(text: str) -> bool:
+    """A short message that refers back ("what's the story of it?", "the game")."""
+    q = text.lower()
+    return len(q.split()) <= 10 and bool(_LEANS_BACK.search(q))
+
+
 def is_follow_up(text: str) -> bool:
     q = text.lower().strip(" ?!.")
     return len(q.split()) <= 6 and (q.startswith(FOLLOW_UP_STARTS) or q in ("why", "how", "source"))
@@ -238,13 +250,21 @@ class QueryPipeline:
         follow_up = is_follow_up(user_input) and bool(prev)
         # What the message is about, in their own words. One that names nothing
         # ("do you have pictures to demonstrate?") is about the last question.
-        about = user_input if (subject_words(user_input) or not prev) else f"{prev} {user_input}"
+        # Owner: "it doesn't remember the context of the last message at all" —
+        # "what's the story of it?" was looked up on its own ("story"), found
+        # nothing, and the speaker was told the library had nothing. A short
+        # message that points back now carries the last question with it.
+        about = (f"{prev} {user_input}" if prev and (not subject_words(user_input) or follow_up
+                                                     or leans_on_last(user_input))
+                 else user_input)
         search_q = (f"{prev} {user_input}" if follow_up else about)
         # Two models: the speaker writes the librarian a clear request first —
         # search words and the full question ("their missions" → which missions).
         # Not in an emergency: there the message is searched as written, and the
         # speaker reads the field-manual passages itself, word for word.
         use_librarian = self.librarian.enabled() and routing_plan.intent != Intent.EMERGENCY
+        if trace and getattr(self.config, "two_models", False) and getattr(self.llm, "thrashing", False):
+            trace.librarian_text = "(off for this run — the graphics card can't hold both models)"
         question = about
         # Low power: no separate request step — the librarian works from the
         # message as written (one model call fewer per question)
@@ -254,7 +274,7 @@ class QueryPipeline:
         # names its subject it did harm: "hemlock" → "hemlock tree forest",
         # "log shelter" → "materials construction safety" (straw-bale pages) —
         # and cost ~0.5 s every time.
-        needs_brief = follow_up or (bool(prev) and not subject_words(user_input))
+        needs_brief = about != user_input
         if use_librarian and not low_power and needs_brief:
             if progress:
                 progress("Checking the library")
@@ -420,9 +440,26 @@ class QueryPipeline:
         asked = wants_picture(user_input)
         if asked:
             images, picture_lines = self._pictures_for(about, images, picture_lines)
+        else:
+            # Owner: instructions and plants should come with their pictures
+            # without asking — a figure whose caption names the subject
+            # ("Fig. 9-5 Water hemlock", "Figure 7. Bow drill") goes with the answer
+            from core.library.figures import find_pictures
+            label = self.knowledge.scorer._source_label
+            for f in find_pictures(about, limit=1):
+                if f["in_caption"] >= min(f["wanted"], 2) and f["image"] not in images:
+                    images.append(f["image"])
+                    picture_lines.append(f"{label(f['source'], f['domain'])}, p. {f['page']}"
+                                         + (f" — {f['shows']}" if f["shows"] else ""))
         note = picture_note(picture_lines, asked)
         if note:
             knowledge_context = (knowledge_context + "\n\n" if knowledge_context else "") + note
+
+        # Step 7f: say what they're following on from, so the speaker keeps the
+        # thread (owner: "memory is a huge issue … not remembering context")
+        if about != user_input and prev:
+            knowledge_context = (f'They\'re following on from their last question: "{prev}". '
+                                 "Keep to that subject.\n\n" + (knowledge_context or "")).strip()
 
         # Step 8: the section's role is the fixed instructions; everything
         # decided for THIS question (rules, facts, guidance — guidance last)
@@ -639,7 +676,7 @@ class QueryPipeline:
         if passages:
             # Only passages on the subject — in their own words if they named
             # one ("who is confuscious" got the film "Your Name" read to it)
-            about = user_input if subject_words(user_input) else question
+            about = question if (carried or not subject_words(user_input)) else user_input
             dropped = [p[0] for p in passages if not relevant(about, f"{p[0]} {p[1]}")]
             passages = [p for p in passages if p[0] not in dropped]
             sources = [x for x in sources if x not in dropped]

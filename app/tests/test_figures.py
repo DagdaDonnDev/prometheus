@@ -168,6 +168,14 @@ class TestRightPicture(unittest.TestCase):
             self.assertTrue(out.images and out.images[0].endswith("fieldguide_p004.jpg"), tab)
             self.assertIn("PICTURE shown under your reply", out.full_prompt)
             self.assertIn("Water hemlock", out.full_prompt)
+        # Owner: instructions and plants should show their pictures without asking
+        for q, page in (("how do I make a bow drill", "p006"), ("what is water hemlock", "p004")):
+            out = pipe.prepare_knowledge(tabs.get_tab("survival"), q, pipe.route(q, "survival"))
+            self.assertTrue(any(i.endswith(f"fieldguide_{page}.jpg") for i in out.images), q)
+            self.assertIn("PICTURE shown under your reply", out.full_prompt)
+        out = pipe.prepare_knowledge(tabs.get_tab("survival"), "how do I purify water",
+                                     pipe.route("how do I purify water", "survival"))
+        self.assertEqual(out.images, [])                                     # nothing captioned so
         out = pipe.prepare_knowledge(tabs.get_tab("survival"), "show me a picture of a crysis",
                                      pipe.route("show me a picture of a crysis", "survival"))
         self.assertEqual(out.images, [])

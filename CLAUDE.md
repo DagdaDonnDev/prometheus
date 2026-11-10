@@ -84,6 +84,35 @@ Piper TTS, Faster-Whisper STT. No network after setup.
   see it, don't describe it" (it invented a description); no "Source:" line.
 - COMPANION_PERSONALITY: "tell me something interesting" → do it, don't hand it back.
 
+## Owner 2026-11-10 13:12: "doesn't remember the context of the last message", "halo the game is in there"
+- History WAS sent; the per-turn context overrode it: "what's the story of it?" → searched "story" →
+  "nothing in the library, say you don't have it". Now `leans_on_last` (≤10 words + it/they/that/
+  story/lore/sequel/the same…) → `about` = prev + message (knowledge path; brief when about ≠
+  message); companion `about` = carried question. "Nothing" note: "nothing NEW … if the
+  conversation above answers it, answer from that".
+- wiki_lookup: MEDIA_HINTS values may be lists; game/games/videogame → _video_game,
+  _video_game_series, _series, _franchise (added to ALL_SUFFIXES). A single word within 2 of a hint
+  word is admitted hint-only (only suffixed titles), so "halo the game" → Halo (series).
+
+## Memory + automatic pictures (owner 2026-11-10: "memory is a huge issue", "instructions/plants should show images")
+- `ContextManager.messages_for(tab, reserve_chars)` fits newest messages into (context_window −
+  max_tokens − 200)×3.5 chars minus system+turn context (window passes reserve); 20 messages + passages
+  overflowed 4096 → Ollama dropped the chat's start. `should_summarize` also when history > half the
+  window (and > SUMMARIZE_OLDEST messages).
+- Facts/loose blocks allow "what was already said in this conversation"; Step 7f adds "They're
+  following on from: <prev>" when `about` ≠ message.
+- Not asked for a picture: `find_pictures(about, limit=1)` attached if `in_caption ≥ min(wanted, 2)`
+  (caption names the subject) — bow drill / water hemlock come with their figure.
+
+## Model swapping (owner's ollama_serve.log 2026-11-10 13:12)
+- RTX 5070 Laptop 8 GB had 1.1 GB free before load → qwen (1.8 GB) and LFM (0.93 GB) evicted each other
+  on every call (1.5–3 s load, 8/29 layers on GPU, one reply 9.8 s). `LLMEngine._note_load(model,
+  load_ms)` (stream + complete): a model seen before needing >700 ms = swap; 2 swaps → `thrashing`
+  → `Librarian.enabled()` False (raw passages path), notice off, status message once, trace note.
+- `ollama_local.clear_stale()` in start(): on PORTS, answering but not `serves_ours`, listening pid
+  (netstat -ano / lsof) whose process is ollama* (tasklist / /proc comm) → taskkill /T /F / SIGTERM.
+  Windows path untested here. `gpu_report()` (nvidia-smi used/total + compute apps) in `--status`.
+
 ## Layout (reorganised 2026-11-09)
 - Root: main.py, launchers, setup/debug .bat/.sh, docs. `tools/` = runnable scripts (each chdirs to
   the project root and puts it on sys.path; `ROOT_DIR`/`ROOT` = parent.parent). `tools` is a package

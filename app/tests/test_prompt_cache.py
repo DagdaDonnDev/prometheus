@@ -95,5 +95,25 @@ class TestSummaryOffTheWindowThread(unittest.TestCase):
         self.assertFalse(self.cm.apply_summary(self.tab, old2, "x"))
 
 
+class TestHistoryFitsTheWindow(unittest.TestCase):
+    """Owner: "memory is a huge issue" — a full window cut the start of the chat."""
+
+    def test_newest_kept_within_the_window(self):
+        from core.ai.context_manager import ContextManager
+        from core.ai.llm import LLMEngine
+        from core.app.config import Config
+        from core.you.tabs import Tab
+        cm = ContextManager(LLMEngine(Config()))
+        tab = Tab(id="t", name="t", icon="", domains=[], system_prompt="")
+        for i in range(10):
+            tab.history += [{"role": "user", "content": f"question {i} " + "x" * 50},
+                            {"role": "assistant", "content": f"answer {i} " + "y" * 1200}]
+        msgs = cm.messages_for(tab, reserve_chars=4000)
+        total = sum(len(m["content"]) for m in msgs) + 4000
+        self.assertLessEqual(total, (4096 - 300 - 200) * 3.5)
+        self.assertTrue(msgs[-1]["content"].startswith("answer 9"))            # newest kept
+        self.assertTrue(cm.should_summarize(tab))                              # older ones get summarised
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -50,7 +50,7 @@ class TestLibrarian(unittest.TestCase):
         f = Librarian(FakeLLM(facts="NOT FOUND")).extract("Who is BT?", [("x", "unrelated text")])
         self.assertFalse(f.found)
         self.assertFalse(f.failed)
-        self.assertIn("Nothing in the library covers this", facts_block(f))
+        self.assertIn("Nothing new in the library for this", facts_block(f))
 
     def test_unreachable_librarian_is_not_not_found(self):
         f = Librarian(FakeLLM(fail=True)).extract("Q", [("x", "text")])
@@ -144,7 +144,7 @@ class TestPipelineWithTwoModels(unittest.TestCase):
         out = self.prepare("How do I make lye from wood ash?", "chemistry")
         self.assertIn("FROM THE LIBRARY", out.full_prompt)
         self.assertIn("ash", out.full_prompt.split("FROM THE LIBRARY", 1)[1].lower())
-        self.assertNotIn("Nothing in the library covers this", out.full_prompt)
+        self.assertNotIn("Nothing new in the library for this", out.full_prompt)
         self.assertTrue(out.sources)
 
     def test_not_found_and_off_subject_shows_nothing(self):
@@ -153,7 +153,7 @@ class TestPipelineWithTwoModels(unittest.TestCase):
         self.llm.brief = "SEARCH: halo game\nQUESTION: what is the game halo?"
         with mock.patch("core.library.wiki_lookup.find_articles", return_value=[]):
             out = self.prepare("halo the game", "survival")
-        self.assertIn("Nothing in the library covers this", out.full_prompt)
+        self.assertIn("Nothing new in the library for this", out.full_prompt)
         self.assertEqual(out.images, [])
         self.assertEqual(out.sources, [])
 
@@ -210,7 +210,11 @@ class TestFromTheLog1110(unittest.TestCase):
                  "Magic: The Gathering is a trading card game created by Richard Garfield in 1993."),
                 ("Confucius", "Confucius",
                  "Confucius was a Chinese philosopher and teacher who lived from 551 to 479 BC."),
-                ("Your_Name", "Your Name", "Your Name is a 2016 Japanese animated film.")]:
+                ("Your_Name", "Your Name", "Your Name is a 2016 Japanese animated film."),
+                ("Halo", "Halo", "A halo is a ring of light around the Sun or Moon."),
+                ("Halo_series", "Halo (series)",
+                 "Halo is a military science fiction video game series made by Bungie. "
+                 "The story follows Master Chief fighting the Covenant.")]:
             (wiki / f"{stem}.txt").write_text(f"# {title}\n\n" + (body + " ") * 5)
         self.old = (w.WIKI_DIR, w.FULL_DB)
         w.WIKI_DIR, w.FULL_DB = wiki, wiki / "none.sqlite"
@@ -300,15 +304,43 @@ class TestFromTheLog1110(unittest.TestCase):
                   system_prompt="You are Prometheus, focused on: films.", custom=True)
         out = self.prepare("list 50 movies", tab)
         self.assertNotIn(self.llm.config.librarian_model, [m for m, _, _ in self.llm.calls])
-        self.assertNotIn("Nothing in the library covers this", out.full_prompt)
+        self.assertNotIn("Nothing new in the library for this", out.full_prompt)
         out = self.prepare("okay what do you know about magic the gathering", tab)
         self.assertIn("Wikipedia — Magic: The Gathering", out.sources)          # "okay" isn't a subject
+
+    def test_halo_the_game(self):
+        from core.library.wiki_lookup import find_articles
+        self.assertEqual([t for t, _ in find_articles("halo the game")], ["Halo (series)"])
+        self.assertEqual([t for t, _ in find_articles("what do you know about the halo games")],
+                         ["Halo (series)"])
+
+    def test_follow_up_remembers_the_last_question(self):
+        # Owner: "it doesn't remember the context of the last message at all"
+        from core.you.tabs import Tab
+        tab = Tab(id="custom_entertainment_9", name="Entertainment", icon="", domains=["general"],
+                  system_prompt="You are Prometheus, focused on: games.", custom=True)
+        tab.history = [{"role": "user", "content": "tell me about halo the game"},
+                       {"role": "assistant", "content": "Halo is a video game series by Bungie."}]
+        self.llm.facts = "- The story follows Master Chief fighting the Covenant [1]"
+        out = self.prepare("what's the story of it?", tab)
+        self.assertIn("Master Chief", self.llm.calls[-1][2])            # the Halo article went in
+        self.assertIn("Wikipedia — Halo (series)", out.sources)
+
+    def test_chat_tab_follow_up_keeps_the_article(self):
+        tab = self.tabs.get_tab("prometheus")
+        saved = list(tab.history)
+        self.addCleanup(setattr, tab, "history", saved)
+        tab.history = [{"role": "user", "content": "have you played halo the game"},
+                       {"role": "assistant", "content": "A bit."}]
+        self.llm.facts = "- The story follows Master Chief [1]"
+        out = self.prepare("what's the story of it?", tab)
+        self.assertIn("Master Chief", out.full_prompt)
 
     def test_nothing_on_the_subject_skips_the_librarian(self):
         with mock.patch("core.library.wiki_lookup.find_articles", return_value=[]):
             out = self.prepare("tell me about the xyzzyplugh engine", "build")
         self.assertEqual(self.llm.calls, [])           # names its subject: no brief, no librarian
-        self.assertIn("Nothing in the library covers this", out.full_prompt)
+        self.assertIn("Nothing new in the library for this", out.full_prompt)
 
 
 if __name__ == "__main__":

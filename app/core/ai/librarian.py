@@ -83,7 +83,10 @@ class Librarian:
         return self.llm.config
 
     def enabled(self) -> bool:
-        return bool(getattr(self.config, "two_models", False))
+        # Off for the rest of the run if the graphics card can't hold both
+        # models and they keep swapping (core/ai/llm._note_load)
+        return bool(getattr(self.config, "two_models", False)) and \
+            not getattr(self.llm, "thrashing", False)
 
     # ── 1. The speaker's request to the librarian ──────────────────────────
 
@@ -270,8 +273,9 @@ def loose_block(passages: List[Tuple[str, str]], message: str, words: int = 110)
     """
     from core.answers.confidence import trim_passage
     body = "\n\n".join(f"[{label}] {trim_passage(text, message, words)}" for label, text in passages)
-    return ("FROM THE LIBRARY — these may only partly cover it. State facts only from them; "
-            "for anything they don't cover, say you don't have that. " + NO_LINKS + ":\n" + body)
+    return ("FROM THE LIBRARY — these may only partly cover it. State facts only from them and "
+            "from what was already said in this conversation; for anything neither covers, say "
+            "you don't have that. " + NO_LINKS + ":\n" + body)
 
 
 def _field(raw: str, name: str) -> str:
@@ -294,7 +298,8 @@ def _numbered(passages: List[Tuple[str, str]], budget: int = MAX_PASSAGE_WORDS) 
 def facts_block(facts: Facts, what: str = "this") -> str:
     """The part of the speaker's prompt that carries the librarian's findings."""
     if facts.found:
-        return ("LIBRARY FACTS — the only facts you may state about " + what +
-                ". Say them in your own words, in your own voice; never add any. " + NO_LINKS +
-                ":\n" + facts.text)
-    return "(Nothing in the library covers this — tell them you don't have it; no guessing.)"
+        return ("LIBRARY FACTS for " + what + " — state facts only from these and from what was "
+                "already said in this conversation; say them in your own words, never add any. "
+                + NO_LINKS + ":\n" + facts.text)
+    return ("(Nothing new in the library for this. If the conversation above already "
+            "answers it, answer from that. Otherwise tell them you don't have it — no guessing.)")

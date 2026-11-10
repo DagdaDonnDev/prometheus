@@ -52,16 +52,32 @@ class ContextManager:
     # many seconds on a slow computer — and the window used to call it on
     # its own thread, freezing until it finished.
 
-    def messages_for(self, tab: Tab) -> List[Dict]:
-        """The messages to send now, never waiting on a summary: if the chat
-        is long and its summary isn't ready yet, just the newest MAX_MESSAGES."""
-        # Low power: half the history (less to read on a processor)
-        limit = MAX_MESSAGES // 2 if getattr(self.llm.config, "low_power_active", False) else MAX_MESSAGES
+    def messages_for(self, tab: Tab, reserve_chars: int = 0) -> List[Dict]:
+        """
+        The messages to send now, never waiting on a summary.
+
+        Step 1: the newest MAX_MESSAGES (half on low power), plus the summary
+        Step 2: and no more than fits the model's window. 20 messages plus
+                this question's library passages could pass 4096 tokens, and
+                Ollama then quietly drops the START of the chat — the owner:
+                "it doesn't remember the context". reserve_chars = what else
+                goes in (instructions, passages); the reply's room is kept too.
+        """
+        cfg = self.llm.config
+        limit = MAX_MESSAGES // 2 if getattr(cfg, "low_power_active", False) else MAX_MESSAGES
         msgs = tab.get_ollama_messages()
-        if len(tab.history) <= limit:
-            return msgs
         head = [m for m in msgs[:1] if m["role"] == "system"]
-        return head + [{"role": m["role"], "content": m["content"]} for m in tab.history[-limit:]]
+        body = [{"role": m["role"], "content": m["content"]} for m in tab.history[-limit:]]
+        # ~3.5 characters per token; keep the reply's tokens and a margin free
+        budget = int((getattr(cfg, "context_window", 4096) - getattr(cfg, "max_tokens", 300) - 200) * 3.5)
+        budget -= reserve_chars + sum(len(m["content"]) for m in head)
+        kept, used = [], 0
+        for m in reversed(body):                    # newest first
+            if kept and used + len(m["content"]) > budget:
+                break
+            kept.append(m)
+            used += len(m["content"])
+        return head + list(reversed(kept))
 
     def summarise_job(self, tab: Tab):
         """
@@ -88,4 +104,8 @@ class ContextManager:
         return True
 
     def should_summarize(self, tab: Tab) -> bool:
-        return len(tab.history) > MAX_MESSAGES
+        """Too many messages, or long ones filling half the model's window —
+        the oldest get summarised so they aren't simply cut off."""
+        chars = sum(len(m.get("content", "")) for m in tab.history)
+        half_window = getattr(self.llm.config, "context_window", 4096) * 3.5 / 2
+        return len(tab.history) > MAX_MESSAGES or (len(tab.history) > SUMMARIZE_OLDEST and chars > half_window)

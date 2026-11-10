@@ -277,6 +277,84 @@ def _use(port: int):
     URL = f"http://{HOST}"
 
 
+def _listening_pid(port: int) -> Optional[int]:
+    """The process listening on 127.0.0.1:port, if it can be told."""
+    try:
+        if os.name == "nt":
+            out = subprocess.run(["netstat", "-ano", "-p", "TCP"], capture_output=True, text=True,
+                                 timeout=10, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+            for line in out.splitlines():
+                parts = line.split()
+                if len(parts) >= 5 and parts[1].endswith(f":{port}") and parts[3].upper() == "LISTENING":
+                    return int(parts[4])
+        elif shutil.which("lsof"):
+            out = subprocess.run(["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
+                                 capture_output=True, text=True, timeout=10).stdout.split()
+            return int(out[0]) if out else None
+    except Exception:
+        pass
+    return None
+
+
+def _process_name(pid: int) -> str:
+    try:
+        if os.name == "nt":
+            out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                                 capture_output=True, text=True, timeout=10,
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+            return out.split(",")[0].strip('" \r\n').lower() if out.strip().startswith('"') else ""
+        return Path(f"/proc/{pid}/comm").read_text().strip().lower()
+    except Exception:
+        return ""
+
+
+def clear_stale() -> List[str]:
+    """
+    An Ollama left on Prometheus's own ports that isn't serving this folder's
+    models (one from before the folder moved) is stopped — it can hold memory
+    on the graphics card. Only ollama processes, only on PORTS (the usual
+    Ollama on 11434 is never touched). Returns what it did, for the log.
+    """
+    done = []
+    for port in PORTS:
+        url = f"http://127.0.0.1:{port}"
+        if not answering(url, timeout=0.5) or serves_ours(url):
+            continue
+        pid = _listening_pid(port)
+        name = _process_name(pid) if pid else ""
+        if not pid or not name.startswith("ollama"):
+            continue
+        try:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=15,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            else:
+                os.kill(pid, 15)
+            done.append(f"stopped an old Ollama on port {port} (pid {pid})")
+        except Exception as e:
+            done.append(f"couldn't stop the old Ollama on port {port}: {e}")
+    return done
+
+
+def gpu_report() -> List[str]:
+    """For the debug log: graphics card memory, and what's using it (NVIDIA)."""
+    if not shutil.which("nvidia-smi"):
+        return []
+    run = lambda *a: subprocess.run(["nvidia-smi", *a], capture_output=True, text=True, timeout=15,
+                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+    try:
+        lines = []
+        for row in run("--query-gpu=name,memory.used,memory.total", "--format=csv,noheader").splitlines():
+            lines.append(f"Graphics card:      {row.strip()}")
+        apps = [r.strip() for r in run("--query-compute-apps=process_name,used_memory",
+                                       "--format=csv,noheader").splitlines() if r.strip()]
+        if apps:
+            lines.append("Using it:           " + "; ".join(apps[:8]))
+        return lines
+    except Exception:
+        return []
+
+
 def _pick_port() -> int:
     """
     Step 1: a port where our own Ollama already runs → reuse it
@@ -312,6 +390,7 @@ def start(wait: float = 0) -> bool:
         return False
     if _proc is not None and _proc.poll() is None:
         return True
+    clear_stale()
     _use(_pick_port())
     if answering():
         return True               # ours, already running
@@ -420,6 +499,8 @@ def status() -> int:
         if answering(url, timeout=0.5):
             print(f"Port {port}:         an Ollama is running — "
                   + ("ours (has these models)" if serves_ours(url) else "NOT ours (other models; skipped)"))
+    for line in gpu_report():
+        print(line)
     try:
         tail = SERVE_LOG.read_text(encoding="utf-8", errors="replace").splitlines()[-15:]
         if tail:

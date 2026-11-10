@@ -30,10 +30,16 @@ MEDIA_HINTS = {
     "film": "_film", "movie": "_film", "movies": "_film", "films": "_film",
     "show": "_tv_series", "series": "_tv_series", "tv": "_tv_series", "episode": "_tv_series",
     "band": "_band", "album": "_album", "song": "_song", "track": "_song",
-    "book": "_novel", "novel": "_novel", "game": "_video_game", "anime": "_tv_series",
+    "book": "_novel", "novel": "_novel", "anime": "_tv_series",
+    # a game can be one title or a whole series ("Halo" → Halo (series))
+    "game": ["_video_game", "_video_game_series", "_series", "_franchise"],
+    "games": ["_video_game_series", "_series", "_video_game", "_franchise"],
+    "videogame": ["_video_game", "_video_game_series", "_series", "_franchise"],
+    "videogames": ["_video_game_series", "_series", "_video_game", "_franchise"],
 }
 ALL_SUFFIXES = ["_film", "_tv_series", "_band", "_album", "_song", "_novel",
-                "_video_game", "_film_series", "_musician", "_actor"]
+                "_video_game", "_film_series", "_musician", "_actor",
+                "_video_game_series", "_series", "_franchise"]
 
 _STOP = {
     "a", "an", "the", "of", "and", "or", "to", "in", "on", "at", "for", "with",
@@ -228,7 +234,11 @@ def find_articles(text: str, max_articles: int = 2) -> List[Tuple[str, Path]]:
     raw = re.findall(r"[\w'-]+", text)
     words = [re.sub(r"[^\w-]", "", w).lower() for w in raw]
     quoted = {q.strip().lower() for q in re.findall(r"[\"“']([^\"”']{2,60})[\"”']", text)}
-    hint_suffixes = [MEDIA_HINTS[w] for w in words if w in MEDIA_HINTS]
+    hint_suffixes = []
+    for w in words:
+        for sfx in ([MEDIA_HINTS[w]] if isinstance(MEDIA_HINTS.get(w), str) else MEDIA_HINTS.get(w, [])):
+            if sfx not in hint_suffixes:
+                hint_suffixes.append(sfx)
 
     found: List[Tuple[int, str, Path]] = []
     for n in range(min(6, len(words)), 0, -1):
@@ -238,12 +248,22 @@ def find_articles(text: str, max_articles: int = 2) -> List[Tuple[str, Path]]:
                 continue
             after_lead_in = (i > 0 and words[i - 1] in LEAD_IN) or \
                 (i > 1 and (words[i - 2], words[i - 1]) in LEAD_IN_PAIRS)
+            hint_only = False
             if n == 1:
                 original = raw[i]
                 capitalised = original[:1].isupper() and i > 0
                 generic = gram[0] in MEDIA_HINTS
-                if generic or not (capitalised or gram[0] in quoted or after_lead_in):
+                # "halo the game", "the halo games": a word right next to a kind
+                # of thing counts — but only as that kind (Halo (series)),
+                # never the plain word's article
+                near_hint = bool(hint_suffixes) and any(
+                    w in MEDIA_HINTS for w in words[max(0, i - 2):i] + words[i + 1:i + 3])
+                if generic:
                     continue
+                if not (capitalised or gram[0] in quoted or after_lead_in):
+                    if not near_hint:
+                        continue
+                    hint_only = True
             elif gram[0] in _EVERYDAY_START:
                 capitalised = any(w[:1].isupper() for w in raw[i + 1:i + n])
                 if not (capitalised or " ".join(gram) in quoted or after_lead_in or hint_suffixes):
@@ -254,7 +274,7 @@ def find_articles(text: str, max_articles: int = 2) -> List[Tuple[str, Path]]:
             plain_first = [key] + [key + s for s in ALL_SUFFIXES]
             if key in titles and _is_disambiguation(titles[key]):
                 plain_first = [key + s for s in ALL_SUFFIXES] + [key]
-            for cand in [key + s for s in hint_suffixes] + plain_first:
+            for cand in [key + s for s in hint_suffixes] + ([] if hint_only else plain_first):
                 if cand in titles:
                     found.append((n, cand, titles[cand]))
                     break
