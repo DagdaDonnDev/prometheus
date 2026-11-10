@@ -32,6 +32,10 @@ PROJECT_DIR = Path(__file__).resolve().parent.parent.parent
 MODELS_DIR = PROJECT_DIR / "models"
 HOST = "127.0.0.1:11435"
 URL = f"http://{HOST}"
+# If 11435 is taken by an Ollama that isn't serving THIS folder's models (one
+# left running from before the folder moved, say), the next port is used
+PORTS = (11435, 11436, 11437, 11438)
+SERVE_LOG = PROJECT_DIR / "logs" / "ollama_serve.log"
 DEFAULT_MODEL = "hf.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF:latest"   # the librarian
 SPEAKER_MODEL = "qwen3:1.7b"                                        # the speaker
 
@@ -257,6 +261,39 @@ def answering(url: str = "", timeout: float = 1.5) -> bool:
         return False
 
 
+def serves_ours(url: str) -> bool:
+    """Is the Ollama at url the one for this folder (it lists our models)?"""
+    try:
+        with _direct.open(f"{url}/api/tags", timeout=1.5) as r:
+            names = {m.get("name", "") for m in json.loads(r.read()).get("models", [])}
+    except Exception:
+        return False
+    return bool(names & set(local_models()))
+
+
+def _use(port: int):
+    global HOST, URL
+    HOST = f"127.0.0.1:{port}"
+    URL = f"http://{HOST}"
+
+
+def _pick_port() -> int:
+    """
+    Step 1: a port where our own Ollama already runs → reuse it
+    Step 2: else the first free one. A port answered by an Ollama with other
+            models (the old folder's, before the move) is skipped — it
+            would say our models don't exist.
+    """
+    free = None
+    for port in PORTS:
+        url = f"http://127.0.0.1:{port}"
+        if not answering(url, timeout=0.5):
+            free = free or port
+        elif serves_ours(url):
+            return port
+    return free or PORTS[-1]
+
+
 def _env() -> Dict[str, str]:
     env = dict(os.environ)
     env["OLLAMA_MODELS"] = str(MODELS_DIR)
@@ -267,25 +304,37 @@ def _env() -> Dict[str, str]:
 def start(wait: float = 0) -> bool:
     """
     Start Prometheus's own Ollama if there's a model in prometheus/models.
-    True if it's answering (or starting). Already running → reused.
+    True if it's answering (or starting). Already running with our models →
+    reused; one serving other models is left alone and another port is used.
     """
     global _proc
     if not has_local_models():
         return False
-    if answering():
-        return True
     if _proc is not None and _proc.poll() is None:
         return True
+    _use(_pick_port())
+    if answering():
+        return True               # ours, already running
     exe = find_ollama()
     if not exe:
         return False
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    # What Ollama says goes to logs/ollama_serve.log — if it won't start or
+    # can't read the models, the reason is there (shown by --status)
     try:
-        _proc = subprocess.Popen([exe, "serve"], env=_env(), stdout=subprocess.DEVNULL,
-                                 stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
-                                 creationflags=flags)
+        SERVE_LOG.parent.mkdir(exist_ok=True)
+        out = open(SERVE_LOG, "w", encoding="utf-8", errors="replace")
     except OSError:
+        out = subprocess.DEVNULL
+    try:
+        _proc = subprocess.Popen([exe, "serve"], env=_env(), stdout=out,
+                                 stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                 creationflags=flags)
+    except OSError as e:
         _proc = None
+        if out is not subprocess.DEVNULL:
+            out.write(f"Couldn't start {exe}: {e}\n")
+            out.close()
         return False
     end = time.time() + wait
     while time.time() < end and not answering():
@@ -322,6 +371,7 @@ def pull(name: str) -> int:
         return 1
     MODELS_DIR.mkdir(exist_ok=True)
     started = None
+    _use(_pick_port())
     if not answering():
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         started = subprocess.Popen([exe, "serve"], env=_env(), stdout=subprocess.DEVNULL,
@@ -349,12 +399,45 @@ def _configured_models() -> List[str]:
         return [SPEAKER_MODEL, DEFAULT_MODEL]
 
 
+def status() -> int:
+    """For the debug log: everything that decides whether the models load."""
+    exe = find_ollama()
+    print(f"Ollama program:     {exe or 'NOT FOUND'}")
+    print(f"Models folder:      {MODELS_DIR}")
+    names = local_models()
+    print(f"Models in it:       {', '.join(names) or 'none'}")
+    for name in names:
+        m = _find_manifest(MODELS_DIR, name)
+        missing = [d for d in _digests(m) if not _blob_path(MODELS_DIR, d)] if m else []
+        if missing:
+            print(f"  [X] {name}: {len(missing)} file(s) missing from models\\blobs")
+    wanted = _configured_models()
+    gone = [n for n in wanted if n not in names]
+    if gone:
+        print(f"  [!] Settings use {', '.join(gone)} — not in the models folder")
+    for port in PORTS:
+        url = f"http://127.0.0.1:{port}"
+        if answering(url, timeout=0.5):
+            print(f"Port {port}:         an Ollama is running — "
+                  + ("ours (has these models)" if serves_ours(url) else "NOT ours (other models; skipped)"))
+    try:
+        tail = SERVE_LOG.read_text(encoding="utf-8", errors="replace").splitlines()[-15:]
+        if tail:
+            print("Last lines of logs\\ollama_serve.log (our Ollama's own output, last start):")
+            for line in tail:
+                print("  " + line[:200])
+    except OSError:
+        pass
+    return 0
+
+
 def main(argv: List[str]) -> int:
     """
     python -m core.ai.ollama_local --move [NAME…]   move models into prometheus/models
     python -m core.ai.ollama_local --pull NAME      download one there
     python -m core.ai.ollama_local --has NAME       exit code 0 if it's there
     python -m core.ai.ollama_local --list           what's there
+    python -m core.ai.ollama_local --status         which Ollama, which models, what's running
     """
     if not argv or argv[0] in ("-h", "--help"):
         print(main.__doc__)
@@ -371,6 +454,8 @@ def main(argv: List[str]) -> int:
         for name in local_models():
             print(name)
         return 0
+    if argv[0] == "--status":
+        return status()
     print(main.__doc__)
     return 1
 

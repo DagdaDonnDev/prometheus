@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import socket
+import subprocess
 import sys
 import tempfile
 import time
@@ -103,12 +104,14 @@ class TestMove(unittest.TestCase):
 
 
 FAKE_SERVE = r'''
-import http.server, os
+import http.server, json, os
 host, port = os.environ["OLLAMA_HOST"].split(":")
 assert os.environ["OLLAMA_MODELS"]
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b'{"models": []}')
+        names = [n for n in os.environ.get("FAKE_NAMES", "").split(",") if n]
+        body = json.dumps({"models": [{"name": n} for n in names]}).encode()
+        self.send_response(200); self.end_headers(); self.wfile.write(body)
     def log_message(self, *a): pass
 http.server.HTTPServer((host, int(port)), H).serve_forever()
 '''
@@ -130,7 +133,8 @@ class TestOwnServer(unittest.TestCase):
         cwd = os.getcwd()
         os.chdir(root)
         self.addCleanup(os.chdir, cwd)
-        with mock.patch.multiple(ol, MODELS_DIR=models, HOST=host, URL=f"http://{host}"), \
+        with mock.patch.multiple(ol, MODELS_DIR=models, HOST=host, URL=f"http://{host}", PORTS=(port,)), \
+                mock.patch.dict(os.environ, {"FAKE_NAMES": ol.DEFAULT_MODEL}), \
                 mock.patch.object(ol, "find_ollama", return_value=sys.executable):
             self.assertTrue(ol.start(wait=10))
             self.assertTrue(ol.answering())
@@ -145,6 +149,40 @@ class TestOwnServer(unittest.TestCase):
             ol.stop()
             time.sleep(0.3)
             self.assertFalse(ol.answering())
+
+    def test_old_server_with_other_models_is_left_alone(self):
+        # Owner, after moving the folder into app/: an Ollama still running on
+        # 11435 from the old place said the models weren't there
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        (root / "serve").write_text(FAKE_SERVE)
+        models = root / "models"
+        _model(models, ol.DEFAULT_MODEL, [b"c"])
+        ports = []
+        for _ in range(2):
+            with socket.socket() as s:
+                s.bind(("127.0.0.1", 0))
+                ports.append(s.getsockname()[1])
+        old = subprocess.Popen([sys.executable, str(root / "serve")],
+                               env={**os.environ, "OLLAMA_HOST": f"127.0.0.1:{ports[0]}",
+                                    "OLLAMA_MODELS": "elsewhere", "FAKE_NAMES": ""})
+        self.addCleanup(old.kill)
+        for _ in range(40):
+            if ol.answering(f"http://127.0.0.1:{ports[0]}"):
+                break
+            time.sleep(0.1)
+        cwd = os.getcwd()
+        os.chdir(root)
+        self.addCleanup(os.chdir, cwd)
+        with mock.patch.multiple(ol, MODELS_DIR=models, PORTS=tuple(ports), _proc=None), \
+                mock.patch.dict(os.environ, {"FAKE_NAMES": ol.DEFAULT_MODEL}), \
+                mock.patch.object(ol, "find_ollama", return_value=sys.executable):
+            self.assertTrue(ol.start(wait=10))
+            self.assertEqual(ol.active_url(), f"http://127.0.0.1:{ports[1]}")
+            self.assertTrue(ol.serves_ours(ol.URL))
+            ol.stop()
+        ol._use(11435)
 
     def test_not_used_without_local_models(self):
         with tempfile.TemporaryDirectory() as t, mock.patch.object(ol, "MODELS_DIR", Path(t)):

@@ -24,8 +24,20 @@ Piper TTS, Faster-Whisper STT. No network after setup.
   run /usr/lib/wine/wine64). The old PyInstaller freeze is gone (it excluded torch anyway).
 - `app/tools/move_into_app.py [--check]`: owner's one-time migration (moves top-level entries into
   app/, deletes top copies where app/ has the file, drops Prometheus.bat/__pycache__; STAY = .git,
-  .venv, prometheus_setup …). A folder Windows won't rename (a file in it open — owner hit WinError 5 on
+  .venv, prometheus_setup …). Launcher: Shift held or `--debug` → app\debug_run.bat; early exit →
+  Yes/No "run in debug mode". A folder Windows won't rename (a file in it open — owner hit WinError 5 on
   voices/) is merged file by file; files still in use are listed, exit 1, re-run continues. make_portable step 5 writes ../prometheus.sh, checks ../Prometheus.exe.
+
+## After the move (owner, 2026-11-09 16:09 log): "no models installed but Ollama running"
+- An Ollama left on 11435 from before the move (OLLAMA_MODELS = the old top\models) answered with
+  no models; start() reused anything answering. Now `ollama_local.PORTS` 11435–11438, `_pick_port`
+  reuses only a server whose /api/tags lists our `local_models()` (`serves_ours`), else first free
+  port; `pull` too. Our serve's output → app/logs/ollama_serve.log. `--status` (in debug_run.bat):
+  exe, models + missing blobs, ports and whose, serve log tail. Window message says when the models
+  ARE in app\models but the answering Ollama isn't reading them.
+- Same log: exit -1073740791 + "QThread: Destroyed while thread is still running" on close →
+  `MainWindow._finish_threads` (gc-found running QThreads: requestInterruption/quit/wait 2 s, then
+  os._exit(0) after everything's saved).
 
 ## Layout (reorganised 2026-11-09)
 - Root: main.py, launchers, setup/debug .bat/.sh, docs. `tools/` = runnable scripts (each chdirs to

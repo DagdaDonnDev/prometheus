@@ -282,7 +282,8 @@ Android app icon and launch screen.
 the app from `app\` with the folder's own Python if it has one
 (`app\runtime\python`), otherwise the Python on the computer — no console
 window. If the app stops while starting (packages not installed yet, say), it
-says so and opens the `app` folder so you can run `setup.bat` or `debug_run.bat`.
+offers to run it again in debug mode. Hold **Shift** while opening it for a
+debug run any time.
 
 It's committed, so you don't build it. After changing the icon or the
 launcher (`tools/launcher/`), rebuild it with MinGW-w64 installed:
@@ -1015,13 +1016,19 @@ prometheus/
 ```
 
 ## Debug run (temporary)
-Double-click `app\debug_run.bat`. It runs Prometheus normally. When you close it,
+**Hold Shift while opening `Prometheus.exe`** (or double-click
+`app\debug_run.bat`). It runs Prometheus normally in a window. When you close it,
 `app\logs\run_<date>_<time>.log` holds your Python/PySide6/Ollama versions, the
 installed and loaded models, your settings, everything the app printed
 (errors included) and the last 10 replies with where each wait came from —
 and what each model said: the speaker's request to the librarian, the facts the
 librarian found (or NOT FOUND, with what it actually wrote), how long the
-librarian took to load, read and write, the reply you got, and any pictures shown. The
+librarian took to load, read and write, the reply you got, and any pictures shown.
+It also says which Ollama program is used, whether every model file is in
+`app\models`, which Ollama is running on Prometheus's ports (and whether it's
+the one reading your models), and the last lines Prometheus's own Ollama
+printed (`app\logs\ollama_serve.log`). If Prometheus stops while starting,
+`Prometheus.exe` offers the debug run itself. The
 folder opens with the file selected, ready to send. `logs/` isn't committed.
 
 ## Testing

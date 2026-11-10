@@ -11,7 +11,9 @@
  *           python.exe / py.exe              (console hidden)
  * Step 3: start  <python> main.py  in app\, passing any arguments on
  * Step 4: if it stops with an error in the first few seconds (packages not
- *         installed yet, say), explain what to do instead of vanishing
+ *         installed yet, say), explain and offer a debug run
+ * Debug run: hold Shift while double-clicking (or Prometheus.exe --debug) →
+ *         app\debug_run.bat in a window, which saves a log to send
  *
  * Built by app\tools\build_exe.py (MinGW): it also puts the icon in.
  */
@@ -63,6 +65,16 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR args, int show) {
         _snwprintf(app, BIG, L"%s", here);
     }
 
+    /* Debug run: Shift held, or --debug */
+    wchar_t debug_bat[BIG];
+    _snwprintf(debug_bat, BIG, L"%s\\debug_run.bat", app);
+    if ((GetAsyncKeyState(VK_SHIFT) & 0x8000) || (args && wcsstr(args, L"--debug"))) {
+        if (exists(debug_bat)) {
+            ShellExecuteW(NULL, L"open", debug_bat, NULL, app, SW_SHOWNORMAL);
+            return 0;
+        }
+    }
+
     /* Step 2 */
     wchar_t own[BIG], own_pkgs[BIG];
     _snwprintf(own, BIG, L"%s\\runtime\\python\\pythonw.exe", app);
@@ -95,11 +107,16 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR args, int show) {
     DWORD code = 0;
     if (WaitForSingleObject(pi.hProcess, 8000) == WAIT_OBJECT_0 &&
         GetExitCodeProcess(pi.hProcess, &code) && code != 0) {
-        tell(L"Prometheus stopped while starting.\n\n"
-             L"If this is the first run on this computer, open the app folder and "
-             L"double-click setup.bat.\n\nOtherwise double-click debug_run.bat there "
-             L"to see what went wrong.");
-        ShellExecuteW(NULL, L"open", app, NULL, NULL, SW_SHOWNORMAL);
+        int run = MessageBoxW(NULL,
+            L"Prometheus stopped while starting.\n\n"
+            L"Run it again in debug mode now? A window shows what happens and a log "
+            L"is saved to send.\n\n(First run on this computer? Run setup.bat in the "
+            L"app folder instead.)\n\nNext time: hold Shift while opening Prometheus.exe.",
+            L"Prometheus", MB_YESNO | MB_ICONINFORMATION);
+        if (run == IDYES && exists(debug_bat))
+            ShellExecuteW(NULL, L"open", debug_bat, NULL, app, SW_SHOWNORMAL);
+        else
+            ShellExecuteW(NULL, L"open", app, NULL, NULL, SW_SHOWNORMAL);
     }
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);

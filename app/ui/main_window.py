@@ -4,6 +4,7 @@ PySide6 UI - clean, readable, functional.
 """
 
 import os
+import sys
 from datetime import datetime, date
 from typing import Optional
 
@@ -484,11 +485,19 @@ class MainWindow(QMainWindow):
             return
 
         if result["missing"]:
-            pulls = "   ".join(f"python -m core.ai.ollama_local --pull {m}" for m in result["missing"])
-            self.status_bar.showMessage(
-                f"⚠ Ollama is running but the model isn't installed. Run: {pulls} "
-                "— or pick an installed one in Settings → Model", 0
-            )
+            from core.ai import ollama_local
+            here = set(ollama_local.local_models())
+            if here and all(m in here for m in result["missing"]):
+                # The models ARE in app\models — the Ollama that answered isn't
+                # the one reading them (the owner saw this after the move)
+                msg = (f"⚠ Your models are in app\\models, but the Ollama at {url} isn't reading "
+                       "them. Close Prometheus and open it again; if this stays, hold Shift while "
+                       "opening Prometheus.exe for a debug log — checking again every 10 s")
+            else:
+                pulls = "   ".join(f"python -m core.ai.ollama_local --pull {m}" for m in result["missing"])
+                msg = (f"⚠ Ollama is running but the model isn't installed. Run: {pulls} "
+                       "— or pick an installed one in Settings → Model")
+            self.status_bar.showMessage(msg, 0)
             self._ollama_timer.start()
             return
 
@@ -1593,6 +1602,32 @@ class MainWindow(QMainWindow):
         # Silent backup on every close
         self.backup.backup(label=f"day{self.memory.data['user']['day_count']}")
         event.accept()
+        self._finish_threads()
+
+    @staticmethod
+    def _finish_threads(wait_ms: int = 2000):
+        """
+        Background jobs still running at close (an Ollama check waiting on a
+        slow server, a reply being written…) crashed the app on the way out:
+        "QThread: Destroyed while thread is still running" (exit -1073740791).
+
+        Step 1: ask each one to stop and give it up to 2 s
+        Step 2: one stuck in a network call can't be stopped — everything is
+                saved by now, so leave at once instead of crashing
+        """
+        import gc
+        from PySide6.QtCore import QThread
+        running = [o for o in gc.get_objects()
+                   if isinstance(o, QThread) and o is not QThread.currentThread() and o.isRunning()]
+        for t in running:                                   # Step 1
+            t.requestInterruption()
+            t.quit()
+        for t in running:
+            t.wait(wait_ms)
+        if any(t.isRunning() for t in running):             # Step 2
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(0)
 
 
 class _NoticedBridge(QObject):

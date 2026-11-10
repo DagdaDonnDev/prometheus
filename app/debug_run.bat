@@ -53,8 +53,8 @@ REM -- Step 1: versions --------------------------------------------
   echo.
   echo --- Ollama ---
   ollama --version
-  echo Models in prometheus\models:
-  %PY% -m core.ai.ollama_local --list
+  echo Prometheus's own Ollama ^(app\models^):
+  %PY% -m core.ai.ollama_local --status
   echo Models in Ollama's usual folder:
   ollama list
   echo Loaded right now:
