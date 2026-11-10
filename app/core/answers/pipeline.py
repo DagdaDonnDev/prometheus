@@ -111,8 +111,12 @@ def _facts_note(facts) -> str:
 def picture_note(lines: List[str], asked: bool) -> str:
     """What the speaker is told about pictures under its reply."""
     if lines:
+        captioned = any(" — " in l for l in lines)
         return ("PICTURE shown under your reply (you CAN show pictures — never say you can't): "
-                + "; ".join(lines) + ". Mention it in a few words; describe only what's written here.")
+                + "; ".join(lines) + ". Say in a few words that it's there"
+                + ("; describe it only by its caption above." if captioned else
+                   " — you can't see it, so don't describe what's in it.")
+                + " No \"Source:\" line — sources are listed under your reply.")
     if asked:
         return "PICTURE: your library has no picture of this — say so in a few words."
     return ""
@@ -245,7 +249,13 @@ class QueryPipeline:
         # Low power: no separate request step — the librarian works from the
         # message as written (one model call fewer per question)
         low_power = getattr(self.config, "low_power_active", False)
-        if use_librarian and not low_power:
+        # The speaker's request (SEARCH words) only when the message leans on the
+        # last one ("their missions", "pictures of that?"). For a message that
+        # names its subject it did harm: "hemlock" → "hemlock tree forest",
+        # "log shelter" → "materials construction safety" (straw-bale pages) —
+        # and cost ~0.5 s every time.
+        needs_brief = follow_up or (bool(prev) and not subject_words(user_input))
+        if use_librarian and not low_power and needs_brief:
             if progress:
                 progress("Checking the library")
             brief = self.librarian.brief(user_input, previous_question(tab, user_input),
@@ -371,7 +381,15 @@ class QueryPipeline:
 
         # Step 7d: the librarian reads them and keeps only the facts that answer
         # the question; the speaker gets those instead of the passages
-        if use_librarian and candidates:
+        if use_librarian and candidates and not subject_words(about):
+            # Nothing to judge passages by ("list 50 movies", "tell me something
+            # interesting") — passages would be whatever matched, OCR noise
+            # included. No library for this one; the speaker just answers.
+            knowledge_context = ""
+            on_subject = []
+            if trace:
+                trace.librarian_text = "(not asked — the message names no subject)"
+        elif use_librarian and candidates:
             if not on_subject:
                 # Nothing on the subject: don't ask it at all (saves ~0.5 s)
                 knowledge_context = facts_block(Facts("", False))

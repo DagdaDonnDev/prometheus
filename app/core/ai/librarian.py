@@ -176,8 +176,17 @@ def parse_facts(raw: str) -> List[str]:
         else:
             continue                                          # prose, headings
         t = re.sub(r"^(PASSAGE|FACT)S?\s*(REFERENCE)?\s*:\s*", "", t, flags=re.I).strip()
-        if re.match(r"^the (passage|passages|text|source)s? (describe|describes|mention|mentions|"
-                    r"list|lists|discuss|discusses|talk|talks|refer|refers)\b", t, flags=re.I):
+        # Lines about the passages rather than facts from them ("The guide
+        # mentions…", "It references…") and OCR noise ("pw2PIEIHGwgéÇ2REIIFIh")
+        t = re.sub(r"^\([^)]{0,80}\)\s*", "", t)            # "(FM 21-10 Field Hygiene) …"
+        if re.match(r"^(the (passage|passages|text|source|guide|book|document|author)s?|it|this|they)\s+"
+                    r"(describe|describes|mention|mentions|list|lists|discuss|discusses|talk|talks|"
+                    r"refer|refers|reference|references|highlight|highlights|note|notes|emphasi[sz]es?|"
+                    r"provides?|includes?|explains?|covers?|focus(es)?)\b", t, flags=re.I):
+            continue
+        tokens = t.split()
+        wordlike = [w for w in tokens if re.fullmatch(r"[A-Za-z][a-z'’-]*[.,;:!?)]*|[\d.,%°/-]+[a-zA-Z°%]*", w)]
+        if len(wordlike) < 0.6 * len(tokens):
             continue
         if not cite:
             m = re.search(r"\[(\d+)\]\s*\.?$", t)
@@ -215,6 +224,10 @@ _GENERIC = {
     "opinion", "love", "loved", "favourite", "favorite", "ever", "know", "knew", "about",
     "real", "person", "based", "who's", "what's", "happened", "happen",
     "movies", "films", "shows", "books", "songs", "albums", "bands",
+    "okay", "ok", "yeah", "yes", "no", "well", "hey", "hi", "hmm", "thanks", "um", "so",
+    "knowledge", "stuff", "instructions", "instruction", "steps", "step", "guide",
+    "process", "diagrams", "build", "building", "simple", "easy", "quick", "basic", "list",
+    "interesting", "some", "any", "more", "please", "maybe", "really", "actually",
 }
 
 

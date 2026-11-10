@@ -168,15 +168,19 @@ class ContradictionDetector:
         Build a structured output for contradicting sources.
         Injected into the system prompt to force structured response.
         """
-        source_a = chunks[0].get("source", "Source 1") if chunks else "Source 1"
-        source_b = chunks[1].get("source", "Source 2") if len(chunks) > 1 else "Source 2"
-
+        # Book titles, not file names ("building_with_straw_bales,_a_practical…"
+        # was written out twice), and no numbered script — the speaker copied
+        # "4. Tell the user to verify before acting" into its reply
+        def label(chunk, fallback):
+            from core.library.titles import title_for
+            source = chunk.get("source", "")
+            return title_for(source) or source.replace("_", " ").strip() or fallback
+        source_a = label(chunks[0], "one book") if chunks else "one book"
+        source_b = label(chunks[1], "another") if len(chunks) > 1 else "another"
+        if source_a == source_b:
+            source_a, source_b = f"one part of {source_a}", "another part"
         return (
-            f"CONTRADICTION DETECTED: {description}\n\n"
-            f"You MUST structure your response as follows:\n"
-            f"1. State what {source_a} indicates\n"
-            f"2. State what {source_b} indicates\n"
-            f"3. State which is the safer/more conservative approach and why\n"
-            f"4. Tell the user to verify before acting\n\n"
-            f"Do NOT resolve the contradiction silently by picking one source."
+            f"Two library passages disagree ({description}). Say briefly what {source_a} "
+            f"says and what {source_b} says, which is the safer choice, and that it's worth "
+            f"checking before acting. Don't quietly pick one."
         )

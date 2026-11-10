@@ -750,8 +750,13 @@ Prometheus runs two models side by side:
 | **Librarian** | LFM2.5 1.2B | Never talks to you. Reads the library passages and lists only the facts in them that answer the request — or says it found nothing |
 
 A question that needs the library goes:
-1. the speaker picks search words (a follow-up like "their missions" gets the
-   subject from the last question)
+1. a message that names what it's about is searched as you wrote it. Only a
+   follow-up that names nothing ("their missions", "pictures of that?") gets
+   the speaker to write search words from the last question first — when it
+   did that every time it went wrong ("hemlock" became "hemlock tree forest")
+   and cost half a second. Fillers ("okay", "so", "list", "instructions")
+   don't count as the subject; a message with no subject at all ("list 50
+   movies") isn't looked up — the speaker just answers
 2. the library is searched with those words. Only passages that are actually
    on the subject go further — your one or two key words, or half of three or
    more, must be in them. Nothing on the subject → the librarian isn't asked
@@ -773,7 +778,8 @@ actually used (the ones the librarian cited, or the on-subject ones) — not
 from whatever else the search turned up. Ask for a picture ("show me a picture
 of hemlock") and every on-subject passage with one counts, and the speaker is
 told whether a picture is shown — so it doesn't say "I don't have pictures"
-above one.
+above one. It describes a picture only by its caption; without one it just says
+it's there (it used to invent what the picture showed).
 
 **Its own name.** Ask "who are you", "who are you named after" or about its
 name (even misspelt) and it answers as that name. If the name comes from

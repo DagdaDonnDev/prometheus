@@ -71,6 +71,19 @@ Piper TTS, Faster-Whisper STT. No network after setup.
   WHENEVER images are attached ("PICTURE shown under your reply … never say you can't") or asked
   and none ("no picture of this"). Picture books go into `sources`.
 
+## Log 2026-11-10 13:01
+- `Librarian.brief` now only when `follow_up` or (prev and no `subject_words`) — it rewrote subjects
+  ("hemlock tree forest", "materials construction safety" for a log shelter → straw-bale pages).
+- `subject_words(about)` empty → no library at all on knowledge tabs (relevant() passes everything
+  then: OCR noise reached the librarian for "list 50 movies"). `_GENERIC` += fillers (okay/so),
+  knowledge/instructions/steps/guide/build/simple/list…
+- `parse_facts` drops "(Book title) " prefixes, meta lines ("The guide mentions…", "It references…")
+  and lines < 60% word-like tokens (OCR).
+- Parroted labels removed: build_bounds "SOURCE STATUS:"/"SCOPE:" → plain sentences; contradiction
+  note → titles (titles.title_for) and no numbered script. `picture_note`: no caption → "you can't
+  see it, don't describe it" (it invented a description); no "Source:" line.
+- COMPANION_PERSONALITY: "tell me something interesting" → do it, don't hand it back.
+
 ## Layout (reorganised 2026-11-09)
 - Root: main.py, launchers, setup/debug .bat/.sh, docs. `tools/` = runnable scripts (each chdirs to
   the project root and puts it on sys.path; `ROOT_DIR`/`ROOT` = parent.parent). `tools` is a package

@@ -104,10 +104,12 @@ class TestPipelineWithTwoModels(unittest.TestCase):
     def test_knowledge_tab_briefs_then_extracts(self):
         out = self.prepare("how do i purify water", "survival")
         models = [m for m, _, _ in self.llm.calls]
-        self.assertEqual(models, [self.llm.config.speaker_model, self.llm.config.librarian_model])
+        # It names its subject, so no rewrite step (it turned "log shelter" into
+        # "materials construction safety") — straight to the librarian
+        self.assertEqual(models, [self.llm.config.librarian_model])
         # The librarian gets their own words, not the speaker's rewrite (it
         # turned "soap from fat" into "soap from coconut oil")
-        self.assertIn("QUESTION: how do i purify water", self.llm.calls[1][2])
+        self.assertIn("QUESTION: how do i purify water", self.llm.calls[-1][2])
         self.assertIn("LIBRARY FACTS", out.full_prompt)
         self.assertIn("Boil water for 1 minute", out.full_prompt)
         self.assertNotIn("Retrieved knowledge — use as primary source:\n[", out.full_prompt)
@@ -274,10 +276,38 @@ class TestFromTheLog1110(unittest.TestCase):
         out = self.prepare("can you show me a picture of hemlock for reference", "survival")
         self.assertIn("PICTURE:", out.full_prompt)
 
+    def test_follow_up_without_a_subject_still_gets_the_request(self):
+        tab = self.tabs.get_tab("survival")
+        saved = list(tab.history)
+        self.addCleanup(setattr, tab, "history", saved)
+        tab.history = [{"role": "user", "content": "how do i purify water"},
+                       {"role": "assistant", "content": "Boil it."}]
+        self.prepare("do you have some pictures of instructions?", tab)
+        self.assertEqual(self.llm.calls[0][0], self.llm.config.speaker_model)    # the request
+        self.assertIn("purify water", self.llm.calls[-1][2])                     # librarian: last subject
+
+    def test_noise_and_meta_lines_are_not_facts(self):
+        from core.ai.librarian import parse_facts
+        raw = ("- (FM 21-10 Field Hygiene Sanitation) pw2PIEIHGwgéÇ2REIIFIh [1]\n"
+               "- The guide mentions using a \"compressive method\" for straw. [2]\n"
+               "- It references building under a marquee. [3]\n"
+               "- Boil water for one full minute to kill germs. [4]")
+        self.assertEqual(parse_facts(raw), ["- Boil water for one full minute to kill germs. [4]"])
+
+    def test_no_subject_no_library(self):
+        from core.you.tabs import Tab
+        tab = Tab(id="custom_entertainment_9", name="Entertainment", icon="", domains=["general"],
+                  system_prompt="You are Prometheus, focused on: films.", custom=True)
+        out = self.prepare("list 50 movies", tab)
+        self.assertNotIn(self.llm.config.librarian_model, [m for m, _, _ in self.llm.calls])
+        self.assertNotIn("Nothing in the library covers this", out.full_prompt)
+        out = self.prepare("okay what do you know about magic the gathering", tab)
+        self.assertIn("Wikipedia — Magic: The Gathering", out.sources)          # "okay" isn't a subject
+
     def test_nothing_on_the_subject_skips_the_librarian(self):
         with mock.patch("core.library.wiki_lookup.find_articles", return_value=[]):
             out = self.prepare("tell me about the xyzzyplugh engine", "build")
-        self.assertEqual([m for m, _, _ in self.llm.calls], [self.llm.config.speaker_model])  # brief only
+        self.assertEqual(self.llm.calls, [])           # names its subject: no brief, no librarian
         self.assertIn("Nothing in the library covers this", out.full_prompt)
 
 

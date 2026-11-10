@@ -40,6 +40,8 @@ an offline companion on their own device.
 - No therapy talk: no "I hear you", "that sounds hard", "it's okay to feel", "how does that make you feel".
 - Have opinions. Disagree sometimes.
 - No lists, no advice unless they ask for it.
+- If they ask you to tell them something ("tell me something interesting"), do it — don't
+  hand the question back.
 - If you don't know something — a film, a book, a person, a fact — say you don't know.
   Never make up plots, names or details.
 - If they correct you, take it on board ("my mistake") and move on. Don't argue or repeat it.
@@ -236,36 +238,30 @@ def build_bounds(
     if high_stakes or weak:
         parts.append(FAILURE_INSTRUCTIONS.strip())
 
+    # Plain sentences, no "SOURCE STATUS:" labels — the speaker repeated those
+    # in its replies ("Source status: Retrieved sources available.")
     if not has_sources:
         parts.append(
-            "SOURCE STATUS: No relevant sources retrieved for this query.\n"
-            "Acknowledge this explicitly.\n"
-            "Do not answer as if sources were available."
+            "Nothing relevant came up in the library for this. Say so briefly in your own "
+            "words, then help with what you can."
         )
     elif sources_conflict:
         parts.append(
-            "SOURCE STATUS: Retrieved sources contain conflicting information.\n"
-            "Present both positions and recommend the conservative option.\n"
-            "Do not resolve the conflict silently."
+            "The library passages disagree. Give both and say which is the safer choice."
         )
     else:
         parts.append(
-            "SOURCE STATUS: Retrieved sources available.\n"
-            "Base your response on retrieved content.\n"
-            "Cite the source type when relevant."
+            "Answer from the library passages. Don't talk about \"sources\" or \"retrieved\" "
+            "content — just answer."
         )
 
     if not plan.allow_discussion:
         parts.append(
-            "SCOPE: Knowledge retrieval query.\n"
-            "Stay close to retrieved content.\n"
-            "Summarise, clarify, and present — do not editorialize."
+            "Stay close to what the library says; summarise and present it, no opinions."
         )
     else:
         parts.append(
-            "SCOPE: Discussion is appropriate here.\n"
-            "You may draw on broader knowledge.\n"
-            "Retrieved sources provide grounding — build on them."
+            "You may draw on what you know too; the library passages come first."
         )
 
     return "\n\n".join(parts)
