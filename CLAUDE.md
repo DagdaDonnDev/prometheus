@@ -39,6 +39,38 @@ Piper TTS, Faster-Whisper STT. No network after setup.
   `MainWindow._finish_threads` (gc-found running QThreads: requestInterruption/quit/wait 2 s, then
   os._exit(0) after everything's saved).
 
+## Log 2026-11-10 08:41 ("still quite dumb", "entertainment tab never works")
+- Root cause of NOT FOUND everywhere: LFM writes "[1] fact … NOT FOUND", the parser kept only "- "
+  lines. `librarian.parse_facts` accepts [n]/-/•/n. lines, splits "[1] a. [2] b", drops "PASSAGE
+  REFERENCE", meta lines ("The passage lists…"), trailing NOT FOUND.
+- Knowledge path: librarian QUESTION = `about` (their words; prev question + message when
+  `subject_words` is empty, e.g. "do you have pictures to demonstrate?") — brief.question is no
+  longer used (it invented "coconut oil"). Passages filtered by `relevant(about, …)` BEFORE the
+  librarian; none → not asked (`facts_block(Facts("",False))`). `relevant`: 1–2 subject words → all,
+  ≥3 → half; `_GENERIC` grew (seen/watched/movies/now/reference…).
+- No on-subject book, or `tab.custom` → `_wiki_search_passages(about)` (wiki_lookup.search on the
+  subject words, disambiguation skipped). Custom tabs route with the prometheus partition, domains
+  ["general"] — they had nothing but off-subject passages.
+- `wants_picture` → images from every on-subject passage with one + "PICTURE: … shown / none" line.
+  `NO_LINKS` sentence in facts/loose blocks (it wrote example.com links and file names).
+  ROLE_CONSTRAINTS/FAILURE_INSTRUCTIONS no longer give quotable phrases ("I don't have a verified
+  procedure…" was repeated verbatim).
+- Companion: `_name_origin` (says/misspells the name, "who are you", "named after", "based on") →
+  `wiki_lookup.closest_article(name)` (exact, else difflib ≥0.75 over same-first-2-letters titles,
+  cached) → "About you: your name is X, after T…" + 120-word lead; skips the wiki/missing step.
+  Companion passages are relevance-filtered before the librarian too. COMPANION_PERSONALITY: "never
+  say you don't have one" (it said "I'm confuscious. I don't have a name.").
+
+## Right picture (owner, 2026-11-10: "says no images then shows images", "not the right one")
+- `figures.scan(path)` → {page: `_shows(text)`} (caption lines | ≤6-word label lines || first 60
+  words); `record` also writes `<domain>/_images/figure_text.json`; ingest uses scan; `--figures`
+  rebuilds both. `find_pictures(question)` → figure pages passing `relevant`, ranked by subject words
+  in the caption/labels, then in the text; only existing jpgs.
+- Pipeline: `_pictures_for(about, …)` when `wants_picture` (knowledge + companion, Step 4d) → images
+  from find_pictures (else the on-subject passage pictures); `picture_note(lines, asked)` is added
+  WHENEVER images are attached ("PICTURE shown under your reply … never say you can't") or asked
+  and none ("no picture of this"). Picture books go into `sources`.
+
 ## Layout (reorganised 2026-11-09)
 - Root: main.py, launchers, setup/debug .bat/.sh, docs. `tools/` = runnable scripts (each chdirs to
   the project root and puts it on sys.path; `ROOT_DIR`/`ROOT` = parent.parent). `tools` is a package

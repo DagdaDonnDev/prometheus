@@ -105,7 +105,9 @@ class TestPipelineWithTwoModels(unittest.TestCase):
         out = self.prepare("how do i purify water", "survival")
         models = [m for m, _, _ in self.llm.calls]
         self.assertEqual(models, [self.llm.config.speaker_model, self.llm.config.librarian_model])
-        self.assertIn("How long should water be boiled?", self.llm.calls[1][2])   # the brief's question
+        # The librarian gets their own words, not the speaker's rewrite (it
+        # turned "soap from fat" into "soap from coconut oil")
+        self.assertIn("QUESTION: how do i purify water", self.llm.calls[1][2])
         self.assertIn("LIBRARY FACTS", out.full_prompt)
         self.assertIn("Boil water for 1 minute", out.full_prompt)
         self.assertNotIn("Retrieved knowledge — use as primary source:\n[", out.full_prompt)
@@ -185,6 +187,98 @@ class TestPipelineWithTwoModels(unittest.TestCase):
         self.llm.config.two_models = False
         self.prepare("how do i purify water", "survival")
         self.assertEqual(self.llm.calls, [])
+
+
+class TestFromTheLog1110(unittest.TestCase):
+    """Owner's debug log, 2026-11-10 08:41 — "it's still quite dumb"."""
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        from core.library import wiki_lookup as w
+        from core.you.memory import Memory
+        from core.library.rag import KnowledgeBase
+        from core.answers.pipeline import QueryPipeline
+        from core.you.tabs import TabManager
+        self.tmp = tempfile.TemporaryDirectory()
+        wiki = Path(self.tmp.name) / "wikipedia"
+        wiki.mkdir()
+        for stem, title, body in [
+                ("Magic_The_Gathering", "Magic: The Gathering",
+                 "Magic: The Gathering is a trading card game created by Richard Garfield in 1993."),
+                ("Confucius", "Confucius",
+                 "Confucius was a Chinese philosopher and teacher who lived from 551 to 479 BC."),
+                ("Your_Name", "Your Name", "Your Name is a 2016 Japanese animated film.")]:
+            (wiki / f"{stem}.txt").write_text(f"# {title}\n\n" + (body + " ") * 5)
+        self.old = (w.WIKI_DIR, w.FULL_DB)
+        w.WIKI_DIR, w.FULL_DB = wiki, wiki / "none.sqlite"
+        w._cache.update({"mtime": None, "titles": {}})
+        w._closest_cache.clear()
+        self.llm = FakeLLM()
+        self.pipe = QueryPipeline(Memory(), KnowledgeBase(), self.llm)
+        self.tabs = TabManager()
+
+    def tearDown(self):
+        from core.library import wiki_lookup as w
+        w.WIKI_DIR, w.FULL_DB = self.old
+        w._cache.update({"mtime": None, "titles": {}})
+        w._closest_cache.clear()
+        self.pipe.config.assistant_name = "Prometheus"
+        self.tmp.cleanup()
+
+    def prepare(self, q, tab):
+        tab = self.tabs.get_tab(tab) if isinstance(tab, str) else tab
+        return self.pipe.prepare_knowledge(tab, q, self.pipe.route(q, tab.id))
+
+    def test_facts_written_as_numbered_lines_are_kept(self):
+        from core.ai.librarian import parse_facts
+        raw = ("[1] Pour lye into fat, stirring constantly; saponification takes up to an hour. "
+               "[2] Add vegetable oil to sand or pumice; melt it\nNOT FOUND")
+        self.assertEqual(parse_facts(raw), [
+            "- Pour lye into fat, stirring constantly; saponification takes up to an hour. [1]",
+            "- Add vegetable oil to sand or pumice; melt it [2]"])
+        self.assertEqual(parse_facts("[2] The passage lists several authors and works"), [])
+        self.llm.facts = raw
+        out = self.prepare("How do I make soap from fat?", "chemistry")
+        self.assertIn("LIBRARY FACTS", out.full_prompt)
+        self.assertIn("Pour lye into fat", out.full_prompt)
+        self.assertIn("No links, file names", out.full_prompt)
+
+    def test_librarian_gets_their_words_not_the_rewrite(self):
+        self.llm.brief = "SEARCH: soap fat lye\nQUESTION: I want to make soap from coconut oil and lye."
+        self.prepare("How do I make soap from fat?", "chemistry")
+        self.assertNotIn("coconut", self.llm.calls[-1][2])
+        self.assertIn("QUESTION: How do I make soap from fat?", self.llm.calls[-1][2])
+
+    def test_entertainment_tab_reads_wikipedia(self):
+        from core.you.tabs import Tab
+        tab = Tab(id="custom_entertainment_9", name="Entertainment", icon="", domains=["general"],
+                  system_prompt="You are Prometheus, focused on: films and games.", custom=True)
+        self.llm.facts = "- Magic: The Gathering is a trading card game made in 1993 [1]"
+        out = self.prepare("tell me about magic the gathering", tab)
+        self.assertIn("Richard Garfield", self.llm.calls[-1][2])            # the article went in
+        self.assertIn("Wikipedia — Magic: The Gathering", out.sources)
+
+    def test_asking_about_its_name(self):
+        self.pipe.config.assistant_name = "confuscious"
+        out = self.prepare("who is confuscious", "prometheus")
+        self.assertIn("your name is confuscious, after Confucius", out.full_prompt)
+        self.assertIn("Chinese philosopher", out.full_prompt)
+        self.assertNotIn("Your Name is a 2016", out.full_prompt)
+        out = self.prepare("confucious is based on a real person who is that person", "prometheus")
+        self.assertIn("after Confucius", out.full_prompt)
+        self.assertIn("never say you don't have one", out.full_prompt)
+
+    def test_picture_request_says_whether_one_is_shown(self):
+        self.llm.facts = "NOT FOUND"
+        out = self.prepare("can you show me a picture of hemlock for reference", "survival")
+        self.assertIn("PICTURE:", out.full_prompt)
+
+    def test_nothing_on_the_subject_skips_the_librarian(self):
+        with mock.patch("core.library.wiki_lookup.find_articles", return_value=[]):
+            out = self.prepare("tell me about the xyzzyplugh engine", "build")
+        self.assertEqual([m for m, _, _ in self.llm.calls], [self.llm.config.speaker_model])  # brief only
+        self.assertIn("Nothing in the library covers this", out.full_prompt)
 
 
 if __name__ == "__main__":

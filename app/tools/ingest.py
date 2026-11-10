@@ -410,7 +410,7 @@ class Ingester:
                     total_images += img_count
                     # Which of those pages really have a figure (only they're shown)
                     from core.library import figures
-                    figures.record(KNOWLEDGE_PATH, domain, source, figures.scan_pdf(file_path))
+                    figures.record(KNOWLEDGE_PATH, domain, source, figures.scan(file_path))
 
                 elif is_pdf:
                     # Non-image-eligible PDF: extract full text, no page tracking

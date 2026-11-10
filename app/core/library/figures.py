@@ -17,7 +17,10 @@ A page counts as a figure page if:
 Scanned books (archive.org) are one full-page image per page, so Step 3
 can't tell there — Steps 1 and 2 do the work.
 
-Kept in knowledge_base/<folder>/_images/figures.json: {source: [page numbers]}.
+Kept in knowledge_base/<folder>/_images/figures.json: {source: [page numbers]},
+and figure_text.json: {source: {page: what it shows}} — its caption and label
+lines, so "a picture of hemlock" finds the page captioned "Water hemlock"
+(find_pictures), not just the page some text came from.
     python tools/ingest.py --figures      (seconds per book; also done by ingest)
 """
 
@@ -33,6 +36,24 @@ _cache: Dict[str, object] = {}
 
 def scan_pdf(path: Path) -> Set[int]:
     """Page numbers (1-based) that have a figure."""
+    return set(scan(path))
+
+
+def _shows(text: str) -> str:
+    """
+    What a figure page shows, in words: its caption lines first ("Fig. 9-5.
+    Water hemlock"), then short label lines, then the start of its text.
+    """
+    lines = [" ".join(l.split()) for l in text.splitlines() if l.strip()]
+    captions = [l for l in lines if _CAPTION.search(l)]
+    labels = [l for l in lines if l not in captions and 1 <= len(l.split()) <= 6]
+    rest = " ".join(lines)
+    out = " | ".join(captions[:4] + labels[:8])
+    return (out + " || " + " ".join(rest.split()[:60])).strip(" |")[:600]
+
+
+def scan(path: Path) -> Dict[int, str]:
+    """{page (1-based): what it shows} for the pages that have a figure."""
     try:
         try:
             import pymupdf as fitz
@@ -40,8 +61,9 @@ def scan_pdf(path: Path) -> Set[int]:
             import fitz
         doc = fitz.open(str(path))
     except Exception:
-        return set()
+        return {}
     pages = []
+    texts = []
     try:
         for page in doc:
             text = page.get_text("text") or ""
@@ -61,17 +83,18 @@ def scan_pdf(path: Path) -> Set[int]:
             except Exception:
                 drawn = 0
             pages.append((words, bool(_CAPTION.search(text)), placed, drawn))
+            texts.append(text)
     finally:
         doc.close()
 
     typical = median([w for w, *_ in pages if w > 30] or [0])
-    out = set()
+    out = {}
     for n, (words, caption, placed, drawn) in enumerate(pages, 1):
         if n <= 2 and not caption:
             continue        # Step 4: the cover and title page aren't figures (one came up for "halo")
         sparse = typical and 25 <= words < typical * 0.45
         if caption or sparse or placed or drawn > 40:   # Steps 1, 2, 3
-            out.add(n)
+            out[n] = _shows(texts[n - 1])
     return out
 
 
@@ -79,16 +102,25 @@ def _path(kb: Path, domain: str) -> Path:
     return kb / domain / "_images" / "figures.json"
 
 
-def record(kb: Path, domain: str, source: str, pages: Set[int]):
-    """Save one book's figure pages."""
-    p = _path(kb, domain)
+def _text_path(kb: Path, domain: str) -> Path:
+    return kb / domain / "_images" / "figure_text.json"
+
+
+def _update(p: Path, source: str, value):
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         data = {}
-    data[source] = sorted(pages)
+    data[source] = value
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data), encoding="utf-8")
+    p.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
+def record(kb: Path, domain: str, source: str, pages):
+    """Save one book's figure pages (a {page: what it shows} dict also saves the words)."""
+    _update(_path(kb, domain), source, sorted(int(n) for n in pages))
+    if isinstance(pages, dict):
+        _update(_text_path(kb, domain), source, {str(n): t for n, t in sorted(pages.items())})
 
 
 def build(kb: Path = Path("knowledge_base"), progress=print) -> int:
@@ -101,12 +133,63 @@ def build(kb: Path = Path("knowledge_base"), progress=print) -> int:
         for pdf in sorted(folder.rglob("*.pdf")):
             if "_images" in pdf.parts:
                 continue
-            pages = scan_pdf(pdf)
+            pages = scan(pdf)
             record(kb, folder.name, source_key(pdf), pages)
             done += 1
             progress(f"  {folder.name}/{pdf.name}: {len(pages)} figure page(s)")
     progress(f"  Figures noted for {done} book(s)")
     return done
+
+
+def find_pictures(question: str, kb: Path = Path("knowledge_base"), limit: int = 2) -> List[Dict]:
+    """
+    The figure pages that show what's asked for — by what's printed on them
+    (caption, labels), not by where a text passage happened to be.
+
+    Step 1: the question's subject words ("picture of hemlock" → hemlock)
+    Step 2: every figure page whose words have them all (one or two words) or
+            half (three or more) — see core/ai/librarian.relevant
+    Step 3: best first: the words in a caption or label line beat words
+            somewhere in the page text; then more of the words
+    Returns [{"image", "domain", "source", "page", "shows"}], only pages
+    whose picture file exists. Empty if no book has been scanned.
+    """
+    from core.ai.librarian import relevant, subject_words
+    want = subject_words(question)
+    if not want or not kb.is_dir():
+        return []
+    found = []
+    for folder in sorted(p for p in kb.iterdir() if p.is_dir()):
+        texts = _cached(_text_path(kb, folder.name))
+        for source, pages in texts.items():
+            for page, shows in pages.items():
+                if not relevant(question, shows):
+                    continue
+                caption = shows.split("||")[0]
+                head = caption.lower()
+                in_caption = sum(1 for w in want if w[:5] in head)
+                in_text = sum(1 for w in want if w[:5] in shows.lower())
+                img = kb / folder.name / "_images" / f"{source}_p{int(page):03d}.jpg"
+                if img.exists():
+                    found.append(((in_caption, in_text), {
+                        "image": str(img), "domain": folder.name, "source": source,
+                        "page": int(page), "shows": caption.split("|")[0].strip().rstrip(".")[:120]}))
+    found.sort(key=lambda f: f[0], reverse=True)
+    return [f[1] for f in found[:limit]]
+
+
+def _cached(p: Path) -> Dict:
+    try:
+        mtime = p.stat().st_mtime
+    except OSError:
+        return {}
+    key = str(p)
+    if _cache.get(key, (None,))[0] != mtime:
+        try:
+            _cache[key] = (mtime, json.loads(p.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            _cache[key] = (mtime, {})
+    return _cache[key][1]
 
 
 def figure_pages(domain: str, source: str, kb: Path = Path("knowledge_base")) -> Optional[List[int]]:

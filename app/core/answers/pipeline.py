@@ -27,7 +27,8 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from core.answers.intent_router import IntentRouter, RoutingPlan
-from core.ai.librarian import facts_block, loose_block, relevant
+from core.ai.librarian import Facts, facts_block, loose_block, relevant, subject_words
+from core.library.figures import wants_picture
 from core.answers.tracer import short
 from core.answers.sufficiency_gate import SourceSufficiencyGate
 from core.answers.contradiction import ContradictionDetector
@@ -105,6 +106,16 @@ def _facts_note(facts) -> str:
         return short(facts.text, 500)
     said = short(getattr(facts, "raw", ""), 160)
     return "NOT FOUND" + (f" (it wrote: {said})" if said and said.upper() != "NOT FOUND" else "")
+
+
+def picture_note(lines: List[str], asked: bool) -> str:
+    """What the speaker is told about pictures under its reply."""
+    if lines:
+        return ("PICTURE shown under your reply (you CAN show pictures — never say you can't): "
+                + "; ".join(lines) + ". Mention it in a few words; describe only what's written here.")
+    if asked:
+        return "PICTURE: your library has no picture of this — say so in a few words."
+    return ""
 
 
 def _trace_librarian(trace, facts):
@@ -219,15 +230,18 @@ class QueryPipeline:
         # Step 2: tiered retrieval. A short follow-up ("yes but why") has nothing
         # to search for on its own — search with the previous question too, so
         # the model keeps the sources behind the answer it's being asked about.
-        follow_up = is_follow_up(user_input) and bool(previous_question(tab, user_input))
-        search_q = (f"{previous_question(tab, user_input)} {user_input}"
-                    if follow_up else user_input)
+        prev = previous_question(tab, user_input)
+        follow_up = is_follow_up(user_input) and bool(prev)
+        # What the message is about, in their own words. One that names nothing
+        # ("do you have pictures to demonstrate?") is about the last question.
+        about = user_input if (subject_words(user_input) or not prev) else f"{prev} {user_input}"
+        search_q = (f"{prev} {user_input}" if follow_up else about)
         # Two models: the speaker writes the librarian a clear request first —
         # search words and the full question ("their missions" → which missions).
         # Not in an emergency: there the message is searched as written, and the
         # speaker reads the field-manual passages itself, word for word.
         use_librarian = self.librarian.enabled() and routing_plan.intent != Intent.EMERGENCY
-        question = user_input
+        question = about
         # Low power: no separate request step — the librarian works from the
         # message as written (one model call fewer per question)
         low_power = getattr(self.config, "low_power_active", False)
@@ -237,7 +251,10 @@ class QueryPipeline:
             brief = self.librarian.brief(user_input, previous_question(tab, user_input),
                                          last_reply(tab))
             search_q = f"{brief.search} {search_q}"
-            question = brief.question
+            # The brief's QUESTION is NOT passed on: the speaker rewrote "How do
+            # I make soap from fat?" as "…from coconut oil" and "what movies can
+            # you tell me about" as "the latest releases". The librarian gets
+            # their own words (with the last question when they name nothing).
             if trace:
                 trace.brief_ms = brief.ms
                 trace.brief_text = short(f"SEARCH {brief.search} | QUESTION {brief.question}", 300)
@@ -324,39 +341,70 @@ class QueryPipeline:
                 if missing:
                     knowledge_context = (knowledge_context + "\n\n" if knowledge_context else "") + missing
 
-        # Step 7c: the librarian reads the passages and keeps only the facts
-        # that answer the question; the speaker gets those instead of the
-        # passages, and may state nothing else about it
+        # Step 7c: only passages that are on the subject go any further — to the
+        # librarian, under the answer as "From:", as pictures. ("who is
+        # confuscious" was being answered from the film "Your Name".)
         used = list(getattr(self.knowledge, "_last_used_chunks", None)
                     or raw_chunks[:max(1, getattr(self.knowledge, "prompt_passages", 3))])
-        # Which passages the answer stands on → its pictures and "From:" lines
-        # (a picture from a passage that wasn't used was what came up for "halo")
-        shown = [i for i, r in enumerate(used) if relevant(f"{user_input} {question}", r.get("content", ""))]
-        wiki_shown = list(wiki_sources)
-        if use_librarian and (raw_chunks or wiki_sources):
-            passages = [(self.knowledge.scorer._source_label(r.get("source", ""), r.get("domain", "")),
-                         r.get("content", "")) for r in used]
-            if not routing_plan.is_strict and tab.id != "medical":
-                passages += self._wiki_passages(search_q, 200)
-            facts = self.librarian.extract(question, passages)
-            if trace:
-                _trace_librarian(trace, facts)
-            if facts.found:
-                knowledge_context = facts_block(facts)
-                cited = facts.cited()
-                shown = [i for i in range(len(used)) if i + 1 in cited] or shown
-                wiki_shown = [label for i, (label, _) in enumerate(passages)
-                              if i >= len(used) and i + 1 in cited] or wiki_shown
-            elif not facts.failed:
-                # Step 7d: "NOT FOUND" from a 1.2B model is often wrong (the soap
-                # guide has the lye steps). Passages that are plainly on the subject
-                # go to the speaker as they are; only none at all = "nothing"
-                keep = [i for i, (label, text) in enumerate(passages)
-                        if relevant(f"{user_input} {question}", f"{label} {text}")]
-                knowledge_context = (loose_block([passages[i] for i in keep], user_input)
-                                     if keep else facts_block(facts))
-                shown = [i for i in keep if i < len(used)]
-                wiki_shown = [passages[i][0] for i in keep if i >= len(used)]
+        candidates = [("book", i, self.knowledge.scorer._source_label(r.get("source", ""), r.get("domain", "")),
+                       r.get("content", "")) for i, r in enumerate(used)]
+        if wiki_sources:
+            candidates += [("wiki", None, label, text) for label, text in self._wiki_passages(search_q, 200)]
+        on_subject = [c for c in candidates if relevant(about, f"{c[2]} {c[3]}")]
+        # Step 7c+: no book on the subject, or a section you made yourself (the
+        # Entertainment one has no books — it "never worked") → search inside
+        # Wikipedia's articles, not just their titles
+        if not routing_plan.is_strict and tab.id != "medical" and (
+                getattr(tab, "custom", False) or not any(c[0] == "book" for c in on_subject)):
+            have = {c[2] for c in candidates}
+            extra = [("wiki", None, label, text) for label, text in self._wiki_search_passages(about)
+                     if label not in have]
+            extra = [c for c in extra if relevant(about, f"{c[2]} {c[3]}")]
+            if extra:
+                candidates += extra
+                on_subject += extra
+                if not use_librarian:
+                    knowledge_context = (knowledge_context + "\n\n" if knowledge_context else "") + \
+                        loose_block([(c[2], c[3]) for c in extra], user_input)
+        shown = [c[1] for c in on_subject if c[0] == "book"]
+        wiki_shown = [c[2] for c in on_subject if c[0] == "wiki"]
+
+        # Step 7d: the librarian reads them and keeps only the facts that answer
+        # the question; the speaker gets those instead of the passages
+        if use_librarian and candidates:
+            if not on_subject:
+                # Nothing on the subject: don't ask it at all (saves ~0.5 s)
+                knowledge_context = facts_block(Facts("", False))
+                if trace:
+                    trace.librarian_text = "(not asked — nothing found was on the subject)"
+            else:
+                facts = self.librarian.extract(question, [(c[2], c[3]) for c in on_subject])
+                if trace:
+                    _trace_librarian(trace, facts)
+                if facts.found:
+                    knowledge_context = facts_block(facts)
+                    cited = [on_subject[n - 1] for n in sorted(facts.cited()) if 0 < n <= len(on_subject)]
+                    if cited:
+                        shown = [c[1] for c in cited if c[0] == "book"]
+                        wiki_shown = [c[2] for c in cited if c[0] == "wiki"]
+                elif not facts.failed:
+                    # "NOT FOUND" from a 1.2B model is often wrong — the passages
+                    # are on the subject, so the speaker reads them itself
+                    knowledge_context = loose_block([(c[2], c[3]) for c in on_subject], user_input)
+
+        # Step 7e: pictures. Asked for one → the figure pages whose caption or
+        # labels name the thing (find_pictures), not the page a text passage
+        # happened to come from. Otherwise only pictures on the passages used.
+        # Either way the speaker is told what's shown — it said "I don't have
+        # pictures" with one right under its reply.
+        images = list(dict.fromkeys(used[i]["image_path"] for i in shown if used[i].get("image_path")))
+        picture_lines = [self._source_line(used[i]) for i in shown if used[i].get("image_path")]
+        asked = wants_picture(user_input)
+        if asked:
+            images, picture_lines = self._pictures_for(about, images, picture_lines)
+        note = picture_note(picture_lines, asked)
+        if note:
+            knowledge_context = (knowledge_context + "\n\n" if knowledge_context else "") + note
 
         # Step 8: the section's role is the fixed instructions; everything
         # decided for THIS question (rules, facts, guidance — guidance last)
@@ -389,8 +437,8 @@ class QueryPipeline:
                 + questions
             )
 
-        images = list(dict.fromkeys(used[i]["image_path"] for i in shown if used[i].get("image_path")))
-        sources = list(dict.fromkeys([self._source_line(used[i]) for i in shown] + wiki_shown))
+        sources = list(dict.fromkeys([self._source_line(used[i]) for i in shown] + wiki_shown +
+                                     [l.split(" — ")[0] for l in picture_lines]))
 
         return PreparedAnswer(
             system_prompt=system_prompt,
@@ -403,6 +451,49 @@ class QueryPipeline:
             images=images,
             sources=sources,
         )
+
+    def _pictures_for(self, about: str, images: List[str], lines: List[str]):
+        """
+        A picture was asked for: the figure pages that show it, best first,
+        then (if none of those) the pictures on the passages used.
+        Returns (image paths, "Book, p. 12 — Fig. 3 Water hemlock" lines).
+        """
+        from core.library.figures import find_pictures
+        found = find_pictures(about)
+        if not found:
+            return images, lines
+        label = self.knowledge.scorer._source_label
+        return ([f["image"] for f in found],
+                [f"{label(f['source'], f['domain'])}, p. {f['page']}" +
+                 (f" — {f['shows']}" if f["shows"] else "") for f in found])
+
+    def _name_origin(self, user_input: str) -> str:
+        """
+        If they're asking about the assistant or its name, what that name comes
+        from (owner: "it would stand to reason it knows the name it was given,
+        and if it's based on someone from history or media, tell me about them").
+
+        Step 1: is the message about it? — "who are you", "your name", "named
+                after", "based on", or the name itself, even misspelt
+        Step 2: the Wikipedia article closest to the name ("confuscious" →
+                Confucius); nothing close → only the name itself
+        """
+        import difflib
+        name = self.assistant_name()
+        q = user_input.lower()
+        words = re.findall(r"[a-z']+", q)
+        says_name = bool(difflib.get_close_matches(name.lower(), words, n=1, cutoff=0.8))
+        if not (says_name or re.search(r"\b(who|what) are you\b|\byour name\b|\bnamed after\b|"
+                                       r"\bbased on\b|\bcalled that\b|\byourself\b", q)):
+            return ""
+        from core.library.wiki_lookup import closest_article, lead
+        found = closest_article(name)
+        if not found:
+            return f"About you: your name is {name}."
+        title, path = found
+        return (f"About you: your name is {name}, after {title}. If they ask who you're named "
+                f"after or who {title} is or was, tell them from this (your library's article "
+                f"on {title}), in your own words:\n{lead(path, 120)}")
 
     def _source_line(self, chunk: Dict) -> str:
         """"Book title, p. 12" for one passage (as under every answer)."""
@@ -502,16 +593,22 @@ class QueryPipeline:
         # it's something we have nothing on, say so. A follow-up that doesn't
         # name it ("go into the lore", "their missions") keeps the subject
         # from the last few messages — that's where the made-up lore came from.
+        # Step 3c: about the assistant itself — "who is confuscious", "who are
+        # you named after": what its name comes from, instead of a Wikipedia
+        # search on the message (that found the film "Your Name")
+        origin = self._name_origin(user_input)
+        if origin:
+            parts.append(origin)
         subject = self._subject_text(tab, user_input) if not own else user_input
         carried = subject != user_input
-        wiki_notes, sources = self._wikipedia_background(subject)
+        wiki_notes, sources = ("", []) if origin else self._wikipedia_background(subject)
         sources = [f"Obsidian — {t}" for t, _ in own] + sources
         if wiki_notes and use_librarian:
             passages += self._wiki_passages(subject, 250)
         elif wiki_notes:
             parts.append(("Earlier in this chat they asked about this — use it only if they "
                           "still are.\n" if carried else "") + wiki_notes)
-        elif not own and not passages:
+        elif not own and not passages and not origin:
             missing = self._not_in_library_note(subject)
             if missing and carried:
                 missing = "If they're still on the same subject — " + missing
@@ -520,25 +617,46 @@ class QueryPipeline:
 
         # Step 4b: the librarian reads what was found and keeps only the facts
         # that answer them; the speaker may say nothing else about it
+        question = (f"{user_input} (about: {subject})" if carried else user_input)
+        if passages:
+            # Only passages on the subject — in their own words if they named
+            # one ("who is confuscious" got the film "Your Name" read to it)
+            about = user_input if subject_words(user_input) else question
+            dropped = [p[0] for p in passages if not relevant(about, f"{p[0]} {p[1]}")]
+            passages = [p for p in passages if p[0] not in dropped]
+            sources = [x for x in sources if x not in dropped]
+            if not passages:
+                if trace:
+                    trace.librarian_text = "(not asked — nothing found was on the subject)"
+                missing = self._not_in_library_note(user_input)
+                if missing:
+                    parts.append(missing)
         if passages:
             if progress:
                 progress("Checking the library")
-            question = (f"{user_input} (about: {subject})" if carried else user_input)
             facts = self.librarian.extract(question, passages)
             if trace:
                 _trace_librarian(trace, facts)
-            keep = [p for p in passages if relevant(question, f"{p[0]} {p[1]}")]
             lead_in = "If they're still on the same subject — " if carried else ""
             if facts.failed:            # librarian unreachable: the speaker reads them itself
                 parts.append("Background from the library — use only this for facts about it:\n" +
                              "\n\n".join(f"{label}: {' '.join(text.split()[:110])}"
                                            for label, text in passages))
-            elif not facts.found and keep:
+            elif not facts.found:
                 # Step 4c: the librarian said NOT FOUND, but the article is on the
                 # subject (it did that with the Magic: The Gathering article)
-                parts.append(lead_in + loose_block(keep, user_input, 90))
+                parts.append(lead_in + loose_block(passages, user_input, 90))
             else:
                 parts.append(lead_in + facts_block(facts, "it"))
+
+        # Step 4d: a picture asked for here too ("show me a picture of a bow
+        # drill") — the figure page that shows it, from any book
+        images = []
+        if wants_picture(user_input):
+            images, lines = self._pictures_for(
+                user_input if subject_words(user_input) else question, [], [])
+            parts.append(picture_note(lines, True))
+            sources = sources + [l.split(" — ")[0] for l in lines]
 
         # Step 5: how to sound right now — read from their message in code,
         # last in the prompt (a small model can't pick tone up on its own)
@@ -559,6 +677,7 @@ class QueryPipeline:
             intent=f"chat_{tone}",          # sets the temperature (core/ai/llm.py)
             sufficiency="NONE",
             status_text="",
+            images=images,
             sources=sources,
         )
 
@@ -619,6 +738,31 @@ class QueryPipeline:
         from core.library.wiki_lookup import find_articles, lead
         return [(f"Wikipedia — {title}", lead(path, words))
                 for title, path in find_articles(text, max_articles=2)]
+
+    @staticmethod
+    def _wiki_search_passages(text: str, n: int = 2, words: int = 200):
+        """
+        [("Wikipedia — Title", opening)] for the best full-text matches of the
+        message's subject words ("tell me about magic the gathering" → Magic:
+        The Gathering). "May refer to" pages are skipped.
+        """
+        from core.ai.librarian import subject_words
+        from core.library.wiki_lookup import search, lead, _is_disambiguation
+        q = " ".join(subject_words(text))
+        if not q:
+            return []
+        out = []
+        try:
+            for r in search(q, limit=n + 3):
+                path = r["path"]
+                if hasattr(path, "open") and _is_disambiguation(path):
+                    continue
+                out.append((f"Wikipedia — {r['title']}", lead(path, words)))
+                if len(out) >= n:
+                    break
+        except Exception:
+            return []
+        return out
 
     @staticmethod
     def _wikipedia_background(user_input: str, words: int = 110):

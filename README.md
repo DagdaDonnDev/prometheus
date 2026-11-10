@@ -633,9 +633,16 @@ Only pages that **really have a picture** are shown — a drawing, a photo, a
 shown any more. When the passage says "see Fig. 3" and the figure is on the
 next page, that page is shown instead. Ask for one ("do you have a picture of
 hemlock", "what does … look like", "how would I identify …") and passages that
-come with a figure are put first. Which pages have figures is noted in
-`knowledge_base\<folder>\_images\figures.json`, done by every library update;
-for books already in your library, run once (seconds per book, no re-indexing):
+come with a figure are put first. Asking for a picture of something ("a
+picture of water hemlock", "a diagram of a bow drill") looks for the figure
+page whose **caption or labels name it** ("Fig. 9-5. Water hemlock"), in any
+book — not the page some text about it came from. The reply is told which
+picture is shown (or that there's none), so it doesn't say it can't show
+pictures above one. Which pages have figures, and what's printed on them, is
+kept in `knowledge_base\<folder>\_images\figures.json` and
+`figure_text.json`, done by every library update; for books already in your
+library, run once (seconds per book, no re-indexing — run it again if you ran
+it before 10 Nov, to pick up the captions):
 
     python tools\ingest.py --figures
 
@@ -743,21 +750,35 @@ Prometheus runs two models side by side:
 | **Librarian** | LFM2.5 1.2B | Never talks to you. Reads the library passages and lists only the facts in them that answer the request — or says it found nothing |
 
 A question that needs the library goes:
-1. the speaker writes the librarian a request: search words plus the full
-   question (so "their missions" becomes "What missions do the Titans in
-   Titanfall 2 carry out?")
-2. the library is searched with those words
-3. the librarian lists the facts the passages support, with numbers, doses
-   and steps copied exactly, or NOT FOUND
-4. the speaker answers in its own voice using only those facts
-5. if the librarian says NOT FOUND but a passage is plainly on the subject
-   (most of your words appear in it), the speaker reads that passage itself —
-   a 1.2B librarian misses things (it said NOT FOUND to the soap guide's lye
-   steps). Only when nothing is on the subject does it say it doesn't have it
+1. the speaker picks search words (a follow-up like "their missions" gets the
+   subject from the last question)
+2. the library is searched with those words. Only passages that are actually
+   on the subject go further — your one or two key words, or half of three or
+   more, must be in them. Nothing on the subject → the librarian isn't asked
+   at all, and the speaker says it doesn't have it
+3. no book on the subject, or a section you made yourself (like
+   Entertainment)? Wikipedia is searched inside its articles too, not just by
+   title ("tell me about magic the gathering" → *Magic: The Gathering*)
+4. the librarian reads your question **in your own words** — not the
+   speaker's rewrite of it, which added things ("soap from fat" became "soap
+   from coconut oil") — and lists the facts the passages support, with
+   numbers, doses and steps copied exactly
+5. the speaker answers in its own voice using only those facts. If the
+   librarian says NOT FOUND anyway, the speaker reads the on-subject passages
+   itself. It's told not to write links, file names or "Source:" lines — the
+   sources are shown under the answer
 
 Pictures and **From:** lines under an answer come only from the passages it
 actually used (the ones the librarian cited, or the on-subject ones) — not
-from whatever else the search turned up.
+from whatever else the search turned up. Ask for a picture ("show me a picture
+of hemlock") and every on-subject passage with one counts, and the speaker is
+told whether a picture is shown — so it doesn't say "I don't have pictures"
+above one.
+
+**Its own name.** Ask "who are you", "who are you named after" or about its
+name (even misspelt) and it answers as that name. If the name comes from
+someone in history or a story, it looks them up in your Wikipedia by the
+nearest spelling ("confuscious" → Confucius) and can tell you about them.
 
 Small talk skips all of this, so it's as quick as before. Emergencies skip
 step 1 and the speaker reads the field-manual passages word for word. A

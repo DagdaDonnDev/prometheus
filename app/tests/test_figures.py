@@ -104,5 +104,75 @@ class TestFigures(unittest.TestCase):
         self.assertEqual(kb._last_images, [])
 
 
+class TestRightPicture(unittest.TestCase):
+    """Owner: "if I ask for a picture of a plant or process it doesn't give the right one"."""
+
+    def setUp(self):
+        import fitz
+        self.tmp = tempfile.TemporaryDirectory()
+        self.old = os.getcwd()
+        os.chdir(self.tmp.name)
+        kb = Path("knowledge_base")
+        (kb / "plants_temperate" / "_images").mkdir(parents=True)
+        doc = fitz.open()
+
+        def text_page(body):
+            doc.new_page().insert_textbox(fitz.Rect(50, 50, 550, 800), body, fontsize=9)
+
+        def figure(caption):
+            pg = doc.new_page()
+            for i in range(50):
+                pg.draw_line((60 + i * 8, 100), (60 + i * 8, 400))
+            pg.insert_text((60, 430), caption)
+
+        text_page(TEXT)                                                       # 1
+        text_page(TEXT)                                                       # 2
+        text_page("Water hemlock is the most poisonous plant in North America. " * 12)  # 3 text only
+        figure("Fig. 9-5. Water hemlock, showing the purple-blotched stem.")  # 4
+        figure("Fig. 9-6. Hemlock tree (Tsuga canadensis).")                   # 5
+        figure("Figure 7. Bow drill: bow, spindle, socket and fireboard.")     # 6
+        text_page(TEXT)                                                       # 7
+        doc.save(str(kb / "plants_temperate" / "fieldguide.pdf"))
+        for i in range(1, 8):
+            (kb / "plants_temperate" / "_images" / f"fieldguide_p{i:03d}.jpg").write_bytes(b"jpg")
+        doc.close()
+        figures.build(kb, progress=lambda *_: None)
+
+    def tearDown(self):
+        os.chdir(self.old)
+        self.tmp.cleanup()
+
+    def test_the_page_that_shows_it(self):
+        found = figures.find_pictures("can you show me a picture of water hemlock for reference")
+        self.assertEqual(found[0]["page"], 4)                  # the drawing, not the text page (3)
+        self.assertIn("Water hemlock", found[0]["shows"])
+        self.assertEqual(figures.find_pictures("show me a diagram of a bow drill")[0]["page"], 6)
+        self.assertEqual(figures.find_pictures("picture of a crysis")[:1], [])
+
+    def test_answer_shows_it_and_the_speaker_knows(self):
+        from core.ai.llm import LLMEngine
+        from core.app.config import Config
+        from core.answers.pipeline import QueryPipeline
+        from core.library.rag import KnowledgeBase
+        from core.you.memory import Memory
+        from core.you.tabs import TabManager
+
+        class Fake(LLMEngine):
+            def complete(self, *a, **k):
+                return "NOT FOUND"
+        pipe = QueryPipeline(Memory(), KnowledgeBase(), Fake(Config()))
+        tabs = TabManager()
+        for tab, q in (("survival", "can you show me a picture of water hemlock"),
+                       ("prometheus", "show me a picture of water hemlock")):
+            out = pipe.prepare_knowledge(tabs.get_tab(tab), q, pipe.route(q, tab))
+            self.assertTrue(out.images and out.images[0].endswith("fieldguide_p004.jpg"), tab)
+            self.assertIn("PICTURE shown under your reply", out.full_prompt)
+            self.assertIn("Water hemlock", out.full_prompt)
+        out = pipe.prepare_knowledge(tabs.get_tab("survival"), "show me a picture of a crysis",
+                                     pipe.route("show me a picture of a crysis", "survival"))
+        self.assertEqual(out.images, [])
+        self.assertIn("no picture of this", out.full_prompt)
+
+
 if __name__ == "__main__":
     unittest.main()

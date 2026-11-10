@@ -19,7 +19,9 @@ How a match is chosen:
 
 import re
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
+
+from core.library.wikitext import title_key
 
 WIKI_DIR = Path("knowledge_base") / "wikipedia"
 
@@ -141,6 +143,48 @@ class _DbTitles:
             rows = self._db.execute("SELECT key, target FROM aliases WHERE key >= ? AND key < ? "
                                     "ORDER BY length(key) LIMIT ?", (prefix, prefix + "\uffff", limit)).fetchall()
         return rows
+
+
+_closest_cache: Dict[str, object] = {}
+
+
+def closest_article(name: str) -> Optional[Tuple[str, Path]]:
+    """
+    The article a name most likely comes from — exact title first, else the
+    nearest spelling ("confuscious" → Confucius). None if nothing is close.
+
+    Step 1: the exact title (skipping "may refer to" pages)
+    Step 2: titles starting with the same two letters and about the same
+            length, compared by spelling (difflib, at least 75% alike)
+    Cached per name — the assistant's name is asked about again and again.
+    """
+    key = title_key(name or "")
+    if len(key) < 3:
+        return None
+    if key in _closest_cache:
+        return _closest_cache[key]
+    titles = _titles()
+    found = None
+    if titles:
+        def usable(k):
+            p = titles.get(k) if hasattr(titles, "get") else None
+            return p is not None and not _is_disambiguation(p)
+        if key in titles and usable(key):
+            found = key
+        else:
+            import difflib
+            if isinstance(titles, _DbTitles):
+                near = [k for k, _ in titles.keys_starting(key[:2], 20000)]
+            else:
+                near = [k for k in titles if k[:2] == key[:2]]
+            near = [k for k in near if abs(len(k) - len(key)) <= 3]
+            for k in difflib.get_close_matches(key, near, n=3, cutoff=0.75):
+                if usable(k):
+                    found = k
+                    break
+    result = (_title_of(titles[found]), titles[found]) if found else None
+    _closest_cache[key] = result
+    return result
 
 
 def _is_disambiguation(path: Path) -> bool:

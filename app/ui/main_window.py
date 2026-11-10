@@ -1616,9 +1616,12 @@ class MainWindow(QMainWindow):
                 saved by now, so leave at once instead of crashing
         """
         import gc
+        import warnings
         from PySide6.QtCore import QThread
-        running = [o for o in gc.get_objects()
-                   if isinstance(o, QThread) and o is not QThread.currentThread() and o.isRunning()]
+        with warnings.catch_warnings():          # touching torch's objects warns (harmless)
+            warnings.simplefilter("ignore")
+            running = [o for o in gc.get_objects()
+                       if isinstance(o, QThread) and o is not QThread.currentThread() and o.isRunning()]
         for t in running:                                   # Step 1
             t.requestInterruption()
             t.quit()

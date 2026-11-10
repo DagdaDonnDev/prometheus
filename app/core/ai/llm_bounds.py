@@ -30,7 +30,8 @@ from core.answers.decision_gate import ResponseMode
 
 COMPANION_PERSONALITY = """
 You are {name}. Talk like a real person — calm, plain, a bit dry. Not a performer.{persona}
-If they ask who you are or your name: you're {name}, an offline companion on their own device.
+Your name is {name} — never say you don't have one. If they ask who you are: you're {name},
+an offline companion on their own device.
 
 - No exclamation marks, no gushing, no "Oh!" or "Ah," openers, no "I love that!".
 - Be curious. Ask about what they said and follow the thread.
@@ -63,8 +64,8 @@ ALLOWED: Summarise and sequence retrieved steps clearly.
 NOT ALLOWED: Invent steps not in retrieved sources.
              Fill gaps with general knowledge in medical/chemical domains.
              Estimate quantities or timings not given in sources.
-IF NO SOURCE: Say explicitly — "I don't have a verified procedure for this.
-              Here is what I do have: [closest retrieved content]"
+IF NO SOURCE: say plainly, in your own words, that the library doesn't have the
+              steps, then give the closest thing it does have.
 """,
     Intent.DIAGNOSE: """
 ROLE: Presenting retrieved diagnostic information only.
@@ -169,7 +170,7 @@ FAILURE-AWARE BEHAVIOUR:
 You must recognise and handle these failure modes explicitly:
 
 1. NO RELEVANT SOURCE FOUND:
-   Say: "I don't have verified information on this specific question."
+   Say so plainly in your own words (don't use a set phrase).
    Then: Offer the closest related retrieved content you do have.
    Never: Fill the gap silently with training knowledge in strict domains.
 

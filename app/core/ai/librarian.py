@@ -46,6 +46,10 @@ EXTRACT_SYSTEM = (
     "- Only if the passages say nothing at all about it, reply with exactly: NOT FOUND"
 )
 
+# The owner's log: "Source: fm_3-05.70_(fm_21-76)_survival_-_may_2002" and a made-up
+# https://example.com link in replies. The sources are listed under every answer.
+NO_LINKS = "No links, file names or \"Source:\" lines — the sources are shown under your reply"
+
 MAX_PASSAGE_WORDS = 380        # all passages together (keeps the librarian's prompt short)
 
 
@@ -133,11 +137,56 @@ class Librarian:
             # No answer at all (Ollama down, model not downloaded): that's not
             # "the library has nothing" — the caller falls back to the passages
             return Facts("", False, ms, failed=True)
-        facts = [ln.strip() for ln in raw.splitlines() if ln.strip().startswith(("-", "•", "*"))]
-        facts = ["- " + ln.lstrip("-•* ").strip() for ln in facts][:5 if low else 8]
-        if not facts or re.search(r"\bNOT FOUND\b", raw) and len(facts) <= 1:
+        facts = parse_facts(raw)[:5 if low else 8]
+        if not facts:
             return Facts("", False, ms, raw=raw, stats=stats)
         return Facts("\n".join(facts), True, ms, raw=raw, stats=stats)
+
+
+def parse_facts(raw: str) -> List[str]:
+    """
+    The librarian's fact lines, as "- fact [n]".
+
+    It doesn't always write "- fact [2]": the owner's log had "[1] Pour lye into
+    fat, stirring constantly…" followed by "NOT FOUND" — real facts that were
+    all thrown away. Accepted:
+        - fact [2]      • fact [2]      [2] fact      2. fact (from passage 2)
+    Skipped: "NOT FOUND", headings, and lines that only talk about the passages
+    without saying anything ("The passage lists several authors…").
+    """
+    out = []
+    lines = []
+    for line in (raw or "").splitlines():
+        # several "[n] fact" on one line → one per line; drop "PASSAGE REFERENCE: …"
+        line = re.sub(r"\s*PASSAGES?\s+REFERENCES?\s*:.*$", "", line, flags=re.I)
+        lines += re.split(r"(?<=\S)\s+(?=\[\d+\]\s+\S)", line)
+    for line in lines:
+        t = line.strip()
+        if not t or re.fullmatch(r"\W*NOT FOUND\W*", t, flags=re.I):
+            continue
+        t = re.sub(r"\s*\bNOT FOUND\b\.?\s*$", "", t, flags=re.I)
+        cite = ""
+        m = re.match(r"^\[(\d+)\]\s*(.+)$", t)                 # [2] fact
+        if m:
+            cite, t = m.group(1), m.group(2)
+        elif re.match(r"^[-•*]\s+", t):                       # - fact [2]
+            t = re.sub(r"^[-•*]\s+", "", t)
+        elif re.match(r"^\d+[.)]\s+", t):                     # 2. fact
+            t = re.sub(r"^\d+[.)]\s+", "", t)
+        else:
+            continue                                          # prose, headings
+        t = re.sub(r"^(PASSAGE|FACT)S?\s*(REFERENCE)?\s*:\s*", "", t, flags=re.I).strip()
+        if re.match(r"^the (passage|passages|text|source)s? (describe|describes|mention|mentions|"
+                    r"list|lists|discuss|discusses|talk|talks|refer|refers)\b", t, flags=re.I):
+            continue
+        if not cite:
+            m = re.search(r"\[(\d+)\]\s*\.?$", t)
+            cite = m.group(1) if m else ""
+            t = re.sub(r"\s*\[\d+\]\s*\.?$", "", t)
+        if len(t.split()) < 3:
+            continue
+        out.append(f"- {t}" + (f" [{cite}]" if cite else ""))
+    return out
 
 
 def _copied(value: str) -> bool:
@@ -160,6 +209,12 @@ _GENERIC = {
     "videogame", "film", "movie", "show", "book", "song", "band", "album", "series", "kind",
     "type", "types", "list", "examples", "example", "help", "please", "also", "just", "really",
     "then", "than", "not", "but", "out", "our", "its", "it's", "i'm", "can't", "don't",
+    "now", "here", "demonstrate", "reference", "references", "look", "looks", "see",
+    "something", "anything", "else", "again", "describe", "explain", "tell", "say",
+    "seen", "watched", "watch", "heard", "read", "played", "playing", "think", "thought",
+    "opinion", "love", "loved", "favourite", "favorite", "ever", "know", "knew", "about",
+    "real", "person", "based", "who's", "what's", "happened", "happen",
+    "movies", "films", "shows", "books", "songs", "albums", "bands",
 }
 
 
@@ -175,8 +230,9 @@ def subject_words(text: str) -> List[str]:
 
 def relevant(message: str, passage: str) -> bool:
     """
-    Does the passage talk about what they asked? At least half the message's
-    subject words appear in it — a near spelling counts ("posionous").
+    Does the passage talk about what they asked? Its subject words appear in
+    it (all of one or two, half of three or more) — a near spelling counts
+    ("posionous").
     A message with no subject words ("who are you") can't be judged → True.
     """
     want = subject_words(message)
@@ -189,7 +245,9 @@ def relevant(message: str, passage: str) -> bool:
         return (w in have or (len(w) >= 5 and w[:5] in stems) or w.rstrip("s") in have
                 or bool(difflib.get_close_matches(w, have, n=1, cutoff=0.85)))
     hits = sum(1 for w in want if seen(w))
-    return hits * 2 >= len(want)
+    # One or two subject words: all of them ("xyzzy engine" isn't about any
+    # engine); three or more: at least half ("mushrooms ireland" in a mushroom book)
+    return hits >= (len(want) if len(want) <= 2 else (len(want) + 1) // 2)
 
 
 def loose_block(passages: List[Tuple[str, str]], message: str, words: int = 110) -> str:
@@ -200,7 +258,7 @@ def loose_block(passages: List[Tuple[str, str]], message: str, words: int = 110)
     from core.answers.confidence import trim_passage
     body = "\n\n".join(f"[{label}] {trim_passage(text, message, words)}" for label, text in passages)
     return ("FROM THE LIBRARY — these may only partly cover it. State facts only from them; "
-            "for anything they don't cover, say you don't have that:\n" + body)
+            "for anything they don't cover, say you don't have that. " + NO_LINKS + ":\n" + body)
 
 
 def _field(raw: str, name: str) -> str:
@@ -224,5 +282,6 @@ def facts_block(facts: Facts, what: str = "this") -> str:
     """The part of the speaker's prompt that carries the librarian's findings."""
     if facts.found:
         return ("LIBRARY FACTS — the only facts you may state about " + what +
-                ". Say them in your own words, in your own voice; never add any:\n" + facts.text)
+                ". Say them in your own words, in your own voice; never add any. " + NO_LINKS +
+                ":\n" + facts.text)
     return "(Nothing in the library covers this — tell them you don't have it; no guessing.)"
