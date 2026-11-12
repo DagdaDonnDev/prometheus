@@ -331,11 +331,8 @@ class DecisionGate:
 
         elif mode == ResponseMode.CAUTIOUS:
             parts.append(
-                "Answer clearly but flag uncertainty honestly.\n"
-                "Match length and format to the question — "
-                "a simple question needs a direct answer with a caveat, "
-                "not a five-step procedure with warnings at every stage.\n"
-                "If something needs verifying, say so once and move on."
+                "Answer clearly, as long as the question needs. "
+                "If something needs checking, say so once and move on."
             )
 
         elif mode == ResponseMode.DIRECT:
@@ -355,8 +352,7 @@ class DecisionGate:
         if is_high_risk and mode not in (ResponseMode.EMERGENCY, ResponseMode.SAFE_MODE):
             domains = ", ".join(risk_domains)
             parts.append(
-                f"High-risk area ({domains}): if anything critical is unclear, "
-                "say what you're assuming. Don't guess silently."
+                f"High-risk ({domains}): if anything critical is unclear, say what you're assuming."
             )
 
         # Source conflict

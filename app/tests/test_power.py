@@ -55,7 +55,8 @@ class TestLowPowerEffects(unittest.TestCase):
         llm.config.low_power_active = True
         pipe = QueryPipeline(Memory(), KnowledgeBase(), llm)
         tab = TabManager().get_tab("survival")
-        pipe.prepare_knowledge(tab, "how do i purify water", pipe.route("how do i purify water", "survival"))
+        q = "why does boiling make water safe"          # an explaining question uses the librarian
+        pipe.prepare_knowledge(tab, q, pipe.route(q, "survival"))
         models = [m for m, _, _ in llm.calls]
         self.assertEqual(models, [llm.config.librarian_model])     # no speaker request step
         self.assertLess(len(llm.calls[0][2].split()), 330)         # librarian reads less

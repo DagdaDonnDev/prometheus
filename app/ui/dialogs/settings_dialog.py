@@ -307,6 +307,12 @@ class SettingsDialog(QDialog):
             self._power.addItem(f"{label}   ▾", value)
         self._power.setCurrentIndex(max(0, self._power.findData(self.config.power_mode)))
         form.addRow("Performance:", self._power)
+        self._think = QCheckBox("Think it through on hard questions (slower, more careful)")
+        self._think.setToolTip("Steps, explanations and diagnosis: the speaker reasons first, then answers.\n"
+                               "Adds a few seconds on a graphics card, much more on a processor —\n"
+                               "never used in low-power mode.")
+        self._think.setChecked(getattr(self.config, "think_hard", False))
+        form.addRow(self._think)
         found = getattr(self.config, "hardware_summary", "")
         why = getattr(self.config, "power_reason", "")
         now = "low power" if getattr(self.config, "low_power_active", False) else "full"
@@ -525,6 +531,7 @@ class SettingsDialog(QDialog):
                                        or self.config.librarian_model).strip()
         self.config.two_models      = self._two_models.isChecked()
         self.config.power_mode      = self._power.currentData() or "auto"
+        self.config.think_hard      = self._think.isChecked()
 
         # Assistant
         # Assistant: every voice's profile, then switch to the chosen voice

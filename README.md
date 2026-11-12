@@ -765,21 +765,66 @@ A question that needs the library goes:
    fitted to the model's window: a long chat plus the library passages used
    to overflow it, and the start of the chat was silently cut off; now the
    newest messages always fit and the older ones are summarised sooner
-2. the library is searched with those words. Only passages that are actually
-   on the subject go further — your one or two key words, or half of three or
-   more, must be in them. Nothing on the subject → the librarian isn't asked
-   at all, and the speaker says it doesn't have it
+2. the library is searched two ways at once — by **meaning** (the search
+   model) and by **words** (a word index over every passage, built by itself
+   in the background; "plants" also finds "plant") — and the two lists are
+   merged. The meaning search only ever read the first ~190 words of each
+   passage and missed exact names; the word search reads all of it. Passages
+   are then ranked by how much of your question they cover, with the book's
+   reliability grade only as a tie-breaker (sorting by the grade let a
+   well-graded manual push out the passage that answered). Only passages that
+   are actually on the subject go further — your one or two key words, or half
+   of three or more, must be in them, with rare words counting more ("soap"
+   must be in a passage about soap-making; "wood" and "ash" alone let a paper
+   mill and a tannery in). Nothing on the subject → the librarian
+   isn't asked at all, and the speaker says it doesn't have it
 3. no book on the subject, or a section you made yourself (like
    Entertainment)? Wikipedia is searched inside its articles too, not just by
    title ("tell me about magic the gathering" → *Magic: The Gathering*)
 4. the librarian reads your question **in your own words** — not the
    speaker's rewrite of it, which added things ("soap from fat" became "soap
-   from coconut oil") — and lists the facts the passages support, with
-   numbers, doses and steps copied exactly
+   from coconut oil") — and the part of each passage around your question
+   (it used to get each passage's first ~125 words, often the introduction,
+   not the steps), and lists the facts the passages support, with numbers,
+   doses and steps copied exactly
 5. the speaker answers in its own voice using only those facts. If the
    librarian says NOT FOUND anyway, the speaker reads the on-subject passages
    itself. It's told not to write links, file names or "Source:" lines — the
    sources are shown under the answer
+
+**How-to questions** ("how do I make lye", "how do I build…") skip the
+librarian: the speaker gets the books' own steps, complete and in order, from
+the line that matches. The librarian's summaries of steps lost or mixed them
+(the bench: soap "with lemon juice" and no lye). It's about a second quicker
+too. Other questions (what, why, tell me about) still go through the librarian.
+
+**What the speaker is told** is kept short and plain: a few lines on how to
+answer (the steps in order, amounts exactly as written, safety first for
+chemistry, when to ask a question), then the library's facts **last**, right
+before your message. It used to be 500+ words of ALL-CAPS rules and
+numbered scripts around two facts — a 1.7B model lost the facts and repeated
+the scripts ("Source status: …", "My sources disagree…") in its replies.
+
+**Emergencies** get the passage from the heading that matches onward
+("If person is unconscious and not breathing: 1. Tilt head back…"); it used
+to be cut off right before the steps.
+
+**Wikipedia** answers use the part of the article your question is about:
+"what's the story of it?" gets the plot, not just the opening paragraph.
+
+**Long answers.** Step-by-step and explaining answers may run to about 650
+tokens (chat stays at 300, so it stays quick). If a reply still hits the
+limit it says so — *"say 'go on' for the rest"* — and **go on** / **continue**
+picks up where it stopped instead of starting again. Replies show as
+formatted text: numbered steps, **bold**, headings (they used to show the raw
+`**` and `###`). If a reply starts repeating a step, it's stopped there (the
+bench caught the same step three times over).
+
+**Think it through** (Settings → Model, off by default): on hard questions —
+steps, explanations, diagnosis — the speaker reasons before answering
+("Thinking it through…" shows meanwhile). Slower — a few seconds on a
+graphics card, much longer on a processor — so never in low-power mode or
+emergencies. Try it with `python tools/bench.py --think` and compare.
 
 Pictures and **From:** lines under an answer come only from the passages it
 actually used (the ones the librarian cited, or the on-subject ones) — not
@@ -787,10 +832,17 @@ from whatever else the search turned up. Ask for a picture ("show me a picture
 of hemlock") and every on-subject passage with one counts, and the speaker is
 told whether a picture is shown — so it doesn't say "I don't have pictures"
 above one. It describes a picture only by its caption; without one it just says
-it's there (it used to invent what the picture showed). You don't have to ask: when an
+it's there (it used to invent what the picture showed). Pictures that come with an answer must be about the subject: what's printed
+on the page (caption, labels) has to mention it — a steam-boiler drawing came
+with an answer about a deep cut. Page numbers like "84." don't count as
+captions. You don't have to ask: when an
 answer is about something a figure's caption names — a plant, a tool, a
 step ("how do I make a bow drill" → "Figure 7. Bow drill") — that picture
 comes with it.
+
+**"Tell me something interesting"** (or "surprise me", "random fact") picks
+an article from your Wikipedia at random and shares it, instead of handing the
+question back.
 
 **Its own name.** Ask "who are you", "who are you named after" or about its
 name (even misspelt) and it answers as that name. If the name comes from
@@ -865,7 +917,13 @@ Completing skills unlocks dependent ones. Progress saved persistently.
 Every knowledge chunk is scored 0–100 based on source reliability.
 Sources ranked: field-tested manuals > historical practical > synthesis > Wikipedia.
 Critical queries (medical, water, poison, radiation) require two independent
-source confirmations. Model explicitly told when confidence is low.
+source confirmations. Model told briefly when confidence is low (no book file
+names — they ended up in replies).
+
+**Disagreeing passages** are flagged only when two passages that mention the
+subject say opposite things about it (edible / poisonous, boil / don't boil)
+or give amounts in the same unit more than 2× apart. It used to fire on any
+"do" next to any "do not", and compared milligrams with minutes.
 
 ### Automatic Backup
 On every close: silent backup to `memory/backups/`. Keeps last 30 backups.
@@ -873,9 +931,10 @@ On startup: validates all JSON files — auto-restores from latest clean backup
 if any file is corrupted. ~5MB total backup footprint.
 
 ### Rolling Conversation Summaries
-History never fills the context window. When any tab exceeds 20 messages,
-the oldest 10 are summarised by the model and compressed into a single paragraph.
-Effectively unlimited conversation memory per tab.
+History never fills the context window. When any tab exceeds 20 messages (or
+its messages fill half the window), the oldest 10 are summarised into short
+notes — every name, number and place, what you said about yourself, what was
+decided, and what you were asking about last.
 
 ---
 
@@ -936,7 +995,15 @@ python tools/ingest.py --stats                          # knowledge base statist
 python tools/ingest.py --wikipedia FILE.xml.bz2         # ingest Wikipedia XML dump
 python tools/ingest.py --wikipedia FILE.xml.bz2 --max-articles 50000
 python tools/ingest.py --init                           # create folder structure only
+python tools/ingest.py --library-index                  # rebuild the word search (the app does this itself)
+python tools/ingest.py --figures                        # note figure pages + captions (pictures)
 ```
+
+The **word search** lives in `memory/library_search.sqlite`. It's built from
+`memory/chunks_fallback.json` (written by every ingest) — after every ingest,
+and by the app itself in the background whenever the library has changed
+(25,000 passages: about 5 s to build, ~10 ms per search). Once it's there the
+app no longer reads the whole chunks file into memory at startup.
 
 **Upgrading from v19 or earlier:** run `python tools/ingest.py` once. It indexes the new
 `scientific_reference/` folder (needed by the Training Path) and, with the v22
@@ -966,6 +1033,7 @@ prometheus/
 ├── tools/ingest.py                  # Knowledge base indexing pipeline
 ├── tools/generate_reference.py      # Printable emergency PDF generator
 ├── tools/build_exe.py               # Prometheus.exe: the launcher + icon (MinGW)
+├── tools/bench.py                   # real questions through the real models → logs/bench_*.md
 ├── tools/launcher/                  # the launcher's C source and icon/file details
 ├── tools/move_into_app.py           # one-time move from the old layout
 ├── tools/build_apk.py               # APK builder (Android, pyside6-android-deploy)
@@ -976,6 +1044,7 @@ prometheus/
 ├── core/
 │   ├── pipeline.py            # Decision layers in one place (no UI code)
 │   ├── wiki_lookup.py         # Wikipedia by title (chat background, Search tab)
+│   ├── library_index.py       # word search over every book passage (SQLite FTS5) + rank merging
 │   ├── search_all.py          # Search tab: books + notes + Wikipedia, each with its source
 │   ├── wiki_index.py          # Full-text search over every article (SQLite FTS5)
 │   ├── tone.py                # Reads the tone of each chat message
@@ -1087,6 +1156,23 @@ python -m unittest discover tests                                  # Training Pa
 python -c "from core.answers.eval_harness import EvalHarness; EvalHarness().run_all()"   # decision layers
 ```
 Both also run from the Dev Panel → Eval. Neither needs Ollama.
+
+### Bench — real questions, real models
+```bash
+python tools/bench.py             # ~20 questions, a few minutes
+python tools/bench.py --quick     # the 8 most telling ones
+python tools/bench.py --think     # with "Think it through" on, to compare
+```
+Asks a fixed set of real questions — from the owner's own logs: lye from wood
+ash, soap from fat, "he's not breathing", a water hemlock picture, a log
+shelter, Halo and a follow-up about its story, Magic: The Gathering, "who are
+you", remembering your dog's name, "go on" — through exactly what the window
+does, with the real models, in fresh chats (your own chats and memory aren't
+touched). Each reply is checked: does it mention what it should, does it avoid
+copied instructions, file names and links, did a picture come with it, how
+long until it started speaking. Writes `logs\bench_<date>_<time>.md` with every
+reply in full, the librarian's facts, sources, pictures and timings — send
+that file after an update.
 
 ---
 

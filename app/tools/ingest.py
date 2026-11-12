@@ -18,6 +18,7 @@ import json
 import argparse
 import hashlib
 import shutil
+import time
 from pathlib import Path
 
 # Run from anywhere: work in the prometheus folder (one up from tools/) so
@@ -1071,6 +1072,11 @@ def main():
         help="Note which PDF pages have a figure, so only those are shown under answers (seconds per book)"
     )
     parser.add_argument(
+        "--library-index",
+        action="store_true",
+        help="Build the word search over every book passage (the app also does this by itself)"
+    )
+    parser.add_argument(
         "--titles",
         action="store_true",
         help="Fill in readable book titles (knowledge_base/titles.json) — seconds"
@@ -1101,6 +1107,9 @@ def main():
                               extract_only=args.extract_only)
         sys.exit(0 if ok else 1)
 
+    if args.library_index:
+        sys.exit(0 if build_library_index() else 1)
+
     if args.figures:
         from core.library import figures
         figures.build(KNOWLEDGE_PATH)
@@ -1125,6 +1134,20 @@ def main():
     # Readable names for any new books (shown under answers)
     from core.library import titles
     titles.build(KNOWLEDGE_PATH)
+    # Word search over every passage (core/library/library_index)
+    build_library_index()
+
+
+def build_library_index() -> bool:
+    """memory/chunks_fallback.json → memory/library_search.sqlite (the word search)."""
+    from core.library.library_index import LibraryIndex, CHUNKS_PATH
+    if not CHUNKS_PATH.exists():
+        print("  (no memory/chunks_fallback.json yet — run python tools/ingest.py first)")
+        return False
+    started = time.time()
+    n = LibraryIndex().build_from_file(CHUNKS_PATH)
+    print(f"✓ Library word search: {n:,} passages indexed in {time.time() - started:.0f} s")
+    return True
 
 
 def _print_stats():

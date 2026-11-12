@@ -46,7 +46,9 @@ def _shows(text: str) -> str:
     """
     lines = [" ".join(l.split()) for l in text.splitlines() if l.strip()]
     captions = [l for l in lines if _CAPTION.search(l)]
-    labels = [l for l in lines if l not in captions and 1 <= len(l.split()) <= 6]
+    # Labels are short lines with real words — not page numbers like "84."
+    labels = [l for l in lines if l not in captions and 1 <= len(l.split()) <= 6
+              and re.search(r"[A-Za-z]{3,}", l)]
     rest = " ".join(lines)
     out = " | ".join(captions[:4] + labels[:8])
     return (out + " || " + " ".join(rest.split()[:60])).strip(" |")[:600]
@@ -141,6 +143,18 @@ def build(kb: Path = Path("knowledge_base"), progress=print) -> int:
     return done
 
 
+def page_shows(domain: str, source: str, page: int, kb: Path = Path("knowledge_base")) -> Optional[str]:
+    """
+    What's printed on a figure page (caption, labels, start of its text) —
+    "" for a page with nothing noted, None if this book hasn't been scanned
+    for captions (then nothing can be said either way).
+    """
+    pages = _cached(_text_path(kb, domain)).get(source)
+    if pages is None:
+        return None
+    return pages.get(str(int(page or 0)), "")
+
+
 def find_pictures(question: str, kb: Path = Path("knowledge_base"), limit: int = 2) -> List[Dict]:
     """
     The figure pages that show what's asked for — by what's printed on them
@@ -163,6 +177,9 @@ def find_pictures(question: str, kb: Path = Path("knowledge_base"), limit: int =
         texts = _cached(_text_path(kb, folder.name))
         for source, pages in texts.items():
             for page, shows in pages.items():
+                low = shows.lower()
+                if not any(w[:4] in low for w in want):      # quick no (thousands of pages)
+                    continue
                 if not relevant(question, shows):
                     continue
                 caption = shows.split("||")[0]
@@ -173,7 +190,10 @@ def find_pictures(question: str, kb: Path = Path("knowledge_base"), limit: int =
                 if img.exists():
                     found.append(((in_caption, in_text), {
                         "image": str(img), "domain": folder.name, "source": source,
-                        "page": int(page), "shows": caption.split("|")[0].strip().rstrip(".")[:120],
+                        "page": int(page),
+                        # a caption with no real words ("84.") says nothing
+                        "shows": (lambda c: c if re.search(r"[A-Za-z]{3,}", c) else "")(
+                            caption.split("|")[0].strip().rstrip(".")[:120]),
                         # how sure: subject words in its caption/labels, out of how many
                         "in_caption": in_caption, "wanted": len(want)}))
     found.sort(key=lambda f: f[0], reverse=True)

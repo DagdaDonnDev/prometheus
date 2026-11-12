@@ -115,7 +115,8 @@ class DerivationEngine:
                 chunks = []
 
         # Second: scan the loaded KB chunks directly (keyword index)
-        fallback = [
+        in_domain = getattr(self.knowledge, "chunks_in_domain", None)
+        fallback = in_domain(ANCHOR_DOMAIN) if in_domain else [
             c for c in getattr(self.knowledge, "_fallback_chunks", [])
             if c.get("domain") == ANCHOR_DOMAIN
         ]

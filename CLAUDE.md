@@ -113,6 +113,62 @@ Piper TTS, Faster-Whisper STT. No network after setup.
   (netstat -ano / lsof) whose process is ollama* (tasklist / /proc comm) → taskkill /T /F / SIGTERM.
   Windows path untested here. `gpu_report()` (nvidia-smi used/total + compute apps) in `--status`.
 
+## Competence pass (2026-11-11/12, owner: "go all out")
+- Retrieval: `core/library/library_index.LibraryIndex` = SQLite FTS5 (porter) over
+  memory/chunks_fallback.json → memory/library_search.sqlite (meta signature = json size:mtime).
+  `KnowledgeBase.__init__` skips loading the JSON when `index.fresh()`; `ensure_index()` (InitWorker,
+  background) builds when stale then frees `_fallback_chunks`; ingest `build_library_index()` after
+  every run + `--library-index`. `_search_domains` = `fuse(vector, keyword)` (RRF, `relevance` 0–1);
+  `_keyword_search` uses the index when ready. `chunks_in_domain()` (Training Path anchors).
+  Why: MiniLM truncates at 256 tokens (~190 words of a 400-word chunk). 25k passages: ~4 s build, ~9 ms/search.
+- `_score_and_format` ranks by `match` = 0.55·coverage + 0.35·relevance + 0.10·reliability (was
+  reliability only). `librarian.coverage(message, passage) → (hits, wanted)`; `relevant` uses it.
+- Librarian `_numbered(…, question)` trims each passage around the question (was its first words).
+  EXTRACT_SYSTEM has a 2-line example.
+- `trim_passage`: splits on headings/list items/numbered steps too; scores ':'-headings and
+  step-introducing lines higher; grows FORWARD first (75%) — emergency "not breathing" steps.
+- Lean turn context: ROLE_CONSTRAINTS / DRIFT_GUARDS / FAILURE_INSTRUCTIONS ("When the library falls
+  short:") rewritten as short plain lines, no quotable scripts; emergencies get role + guard only.
+  `build_system_prompt` order: bounds → "How to answer:" → "About them:" (skipped if just "Day: 1") →
+  confidence note → "From the library (answer from this):" LAST. Confidence/redundancy notes carry no
+  file names. `facts_block` strips [n]. Lye prompt 520 → ~230 words (test).
+- `ContradictionDetector.detect(chunks, tab_id, query)`: only passages mentioning the subject, only
+  sentences naming it, OPPOSING_PAIRS without bare do/should, numbers compared per unit.
+- `LLMEngine.reply_tokens(intent)`: LONG_INTENTS ≥650 (low power ≤450), chat = max_tokens (≤220 low).
+  done_reason "length" → `CUT_SHORT_NOTE` appended; `wants_continue` ("go on", "continue"…) →
+  CONTINUE_NOTE (knowledge + companion). Assistant bubbles render `Qt.MarkdownText`.
+- `config.think_hard` (Settings → Model): `llm.thinks(model, intent)` → `think: true`, num_predict +1200,
+  `on_thinking` → `LLMWorker.thinking` → "Thinking it through…" (hidden on first token). Never in
+  emergency/low power/thrashing.
+- `wiki_lookup.passage_for(path, title, question, words)`: opening, or first sentence + the stretch with
+  the question's non-title subject words; `_wiki_passages(text, words, question)`.
+- `llm.summarize`: notes-style prompt (names, numbers, places, their situation, last topic); speaker
+  when thrashing (+ think off, strip_thinking).
+- `tools/bench.py [--quick] [--think]`: CASES from the owner's logs through route→prepare_knowledge→
+  stream in fresh tab copies; checks expect/avoid/NEVER/pictures; logs/bench_*.md. Tested with stubs.
+
+## From the first real bench (owner, 2026-11-12, 20/21 by the old checks)
+- Intent patterns matched as substrings ("ill" in "drill" → DIAGNOSE): `_pattern_re` = word start,
+  whole word for ≤3 letters.
+- `LibraryIndex.weights(words)` = IDF (count(MATCH word) per word, cached; df 0 → 0);
+  `KnowledgeBase.word_weights(text)`; `librarian.weighted_share` (rare words count more) in rerank
+  `match`; `relevant(message, passage, weights)` uses it for ≥3 words. Pipeline passes weights.
+  `_seen` quick-no on the first 2 letters before difflib.
+- PROCEDURE intent with on-subject book passages → `steps_block` (top 2 book passages, trim 170 / 110
+  low power, forward from the matching line), NO librarian (its summaries lost lye, mixed tanning in).
+- `build_bounds`: "clarifying question" lines only when weak (bench: "Clarification Needed:" list).
+  Facts lead is "What the library says about … without a heading" (was echoed as **Library Facts:**).
+  `parse_facts` drops "Not explicitly listed…/Not provided…".
+- Stream loop guard: `_repeat_point` (lines ≥30 chars, numbering stripped) → stop, on_done(trimmed);
+  `ChatView.replace_reply`; options `repeat_last_n: 256`.
+- Pictures with an answer: passage page images only if `figures.page_shows()` text covers a subject
+  word (None = book not scanned → kept). `_shows` labels need a 3-letter word; captions without letters
+  → "". `find_pictures` quick-no per page (18k pages ≈ 58 ms).
+- Custom-tab wiki full-text search only when no article was found by title (Halo + haloes of light).
+- `wants_something_interesting` → `wiki_lookup.random_article()` (no lists/years/disambig, ≥60 words)
+  → companion shares it. Trace `search_ms` (breakdown + bench). Bench warms the librarian too, records
+  speaker stats, checks repeats; soap must say "lye".
+
 ## Layout (reorganised 2026-11-09)
 - Root: main.py, launchers, setup/debug .bat/.sh, docs. `tools/` = runnable scripts (each chdirs to
   the project root and puts it on sys.path; `ROOT_DIR`/`ROOT` = parent.parent). `tools` is a package

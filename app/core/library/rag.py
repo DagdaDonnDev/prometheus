@@ -41,7 +41,51 @@ class KnowledgeBase:
         # to about this many words around the question (see trim_passage)
         self.prompt_passages = 3
         self.passage_words   = 130
-        self._load_fallback()
+        # Word search over every passage (core/library/library_index). When
+        # it's up to date the chunks file isn't read into memory at all.
+        from core.library.library_index import LibraryIndex
+        self.index = LibraryIndex()
+        if not self.index.fresh():
+            self._load_fallback()
+
+    def ensure_index(self, status_callback=None) -> bool:
+        """
+        Build the word index if the chunks file changed since it was built
+        (run in the background by InitWorker; also after every ingest).
+        Then the in-memory copy of the chunks isn't needed any more.
+        """
+        from core.library.library_index import CHUNKS_PATH
+        if self.index.fresh():
+            return True
+        if not CHUNKS_PATH.exists():
+            return False
+        try:
+            if status_callback:
+                status_callback("Indexing your library for word search (once, about a minute)…")
+            n = self.index.build_from_file(CHUNKS_PATH)
+            if status_callback:
+                status_callback(f"Library word search ready — {n:,} passages")
+            self._fallback_chunks = []
+            return True
+        except Exception as e:
+            if status_callback:
+                status_callback(f"Library word search unavailable ({e})")
+            return False
+
+    def word_weights(self, text: str) -> Dict[str, float]:
+        """How telling each subject word of `text` is in this library ({} without the index)."""
+        if not self.index.ready():
+            return {}
+        from core.ai.librarian import subject_words
+        return self.index.weights(subject_words(text))
+
+    def chunks_in_domain(self, domain: str) -> List[Dict]:
+        """Every passage of one folder (the Training Path's anchors)."""
+        if self.index.ready():
+            found = self.index.in_domain(domain)
+            if found:
+                return found
+        return [c for c in self._fallback_chunks if c.get("domain") == domain]
 
     def _init_personal_searcher(self):
         """Lazy-init personal doc searcher to avoid circular imports."""
@@ -281,12 +325,16 @@ class KnowledgeBase:
         if not domains:
             return []
 
-        if self.ready and self.collection and self.collection.count() > 0:
-            results = self._vector_search(query, domains, n)
-        else:
-            results = self._keyword_search(query, domains, n)
-
-        return results
+        # Step 1: by meaning (ChromaDB) and by words (library index), a wider
+        # net than needed; Step 2: merged by rank — a passage high in both
+        # comes first. Meaning search alone only read each passage's first
+        # ~190 words and missed exact names.
+        from core.library.library_index import fuse
+        wide = max(n * 3, 8)
+        by_meaning = (self._vector_search(query, domains, wide)
+                      if self.ready and self.collection and self.collection.count() > 0 else [])
+        by_words = self._keyword_search(query, domains, wide)
+        return fuse(by_meaning, by_words)[:n]
 
     def _score_and_format(
         self,
@@ -334,10 +382,19 @@ class KnowledgeBase:
         # stretches of one book made the model say the same thing three times
         # Asked for a picture ("what does hemlock look like")? Passages that
         # come with a figure go first
+        # Ranked by how well each passage MATCHES the question — its share of
+        # the question's subject words, and its search rank — with the book's
+        # reliability grade only as a tie-breaker. Sorting by the grade alone
+        # let a well-graded manual push out the passage that answered it.
         from core.library.figures import wants_picture
+        from core.ai.librarian import weighted_share
         picture = wants_picture(query)
-        scored.sort(key=lambda x: (picture and bool(x.get("image_path")), x["confidence"]["score"]),
-                    reverse=True)
+        weights = self.word_weights(query)
+        for r in scored:
+            share = weighted_share(query, r.get("content", ""), weights)
+            r["match"] = round(0.55 * share + 0.35 * float(r.get("relevance", 0.5))
+                               + 0.10 * r["confidence"]["score"] / 100, 3)
+        scored.sort(key=lambda x: (picture and bool(x.get("image_path")), x["match"]), reverse=True)
         distinct = self._diverse(scored)
 
         # Redundancy check
@@ -486,6 +543,8 @@ class KnowledgeBase:
         search) for the Search tab: by meaning when ChromaDB is set up,
         by words otherwise.
         """
+        from core.library.library_index import fuse
+        by_meaning = []
         if self.ready and self.collection and self.collection.count() > 0:
             try:
                 emb = self.embedder.encode([query]).tolist()
@@ -493,12 +552,12 @@ class KnowledgeBase:
                     query_embeddings=emb, n_results=min(n, self.collection.count()),
                     where={"domain": {"$nin": sorted(SKIP_IN_MEMORY)}},
                     include=["documents", "metadatas"])
-                return [{"content": doc, "source": meta.get("source", "unknown"),
-                         "domain": meta.get("domain", "general"), "page_num": meta.get("page_num", 0)}
-                        for doc, meta in zip(res["documents"][0], res["metadatas"][0])]
+                by_meaning = [{"content": doc, "source": meta.get("source", "unknown"),
+                               "domain": meta.get("domain", "general"), "page_num": meta.get("page_num", 0)}
+                              for doc, meta in zip(res["documents"][0], res["metadatas"][0])]
             except Exception:
                 pass
-        return self._keyword_search(query, None, n)
+        return fuse(by_meaning, self._keyword_search(query, None, n))[:n]
 
     def _keyword_search(
         self,
@@ -506,7 +565,16 @@ class KnowledgeBase:
         domains: Optional[List[str]],
         n: int
     ) -> List[Dict]:
-        """Keyword search fallback."""
+        """Keyword search: the word index when it's built, else a scan of the loaded chunks."""
+        if self.index.ready():
+            results = []
+            for r in self.index.search(query, domains, n):
+                r.pop("bm25", None)
+                img = self._resolve_image(r)
+                if img:
+                    r["image_path"] = str(img)
+                results.append(r)
+            return results
         query_words = set(query.lower().split())
         scored: List[Tuple[float, Dict]] = []
 

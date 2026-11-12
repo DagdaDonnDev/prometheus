@@ -92,14 +92,20 @@ class QueryTrace:
     brief_text:     str = ""        # speaker → librarian: "SEARCH … | QUESTION …"
     librarian_text: str = ""        # librarian's facts, or NOT FOUND
     librarian_stats: str = ""       # its load / read / write times
+    search_ms:      int = 0         # the library search (meaning + words)
     response_text:  str = ""        # the reply the person got
     images:         List[str] = field(default_factory=list)   # pictures shown with it
 
     def breakdown(self) -> str:
         """One line: where the time to the first word went."""
-        lib = ""
-        if self.brief_ms or self.librarian_ms:
-            lib = f"(request {self.brief_ms} ms, librarian {self.librarian_ms} ms) "
+        bits = []
+        if self.search_ms:
+            bits.append(f"search {self.search_ms} ms")
+        if self.brief_ms:
+            bits.append(f"request {self.brief_ms} ms")
+        if self.librarian_ms:
+            bits.append(f"librarian {self.librarian_ms} ms")
+        lib = f"({', '.join(bits)}) " if bits else ""
         if not (self.prompt_tokens or self.load_ms):
             return f"prep {self.prep_ms} ms {lib}".strip()
         return (f"prep {self.prep_ms} ms {lib}· model load {self.load_ms} ms · "

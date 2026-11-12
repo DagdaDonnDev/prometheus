@@ -26,7 +26,7 @@ import difflib
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 BRIEF_SYSTEM = (
     "You write requests for a librarian. Reply with exactly two lines and nothing else:\n"
@@ -43,7 +43,10 @@ EXTRACT_SYSTEM = (
     "- One fact per line, starting with \"- \" and ending with the passage number, e.g. [2].\n"
     "- Copy numbers, amounts, doses, times and steps exactly as written.\n"
     "- At most 8 facts. No opinions, no advice, nothing the passages don't say.\n"
-    "- Only if the passages say nothing at all about it, reply with exactly: NOT FOUND"
+    "- Only if the passages say nothing at all about it, reply with exactly: NOT FOUND\n"
+    "Example of a good answer:\n"
+    "- Pour rainwater slowly through hardwood ash and collect what drips out [1]\n"
+    "- Run it through the ash 2-3 more times to make it stronger [1]"
 )
 
 # The owner's log: "Source: fm_3-05.70_(fm_21-76)_survival_-_may_2002" and a made-up
@@ -127,7 +130,7 @@ class Librarian:
         if not passages:
             return Facts("", False, 0)
         low = getattr(self.config, "low_power_active", False)
-        numbered = _numbered(passages, 220 if low else MAX_PASSAGE_WORDS)
+        numbered = _numbered(passages, 220 if low else MAX_PASSAGE_WORDS, question)
         try:
             raw = self.llm.complete(EXTRACT_SYSTEM, f"QUESTION: {question}\n\nPASSAGES:\n{numbered}",
                                     model=self.config.librarian_model,
@@ -182,6 +185,10 @@ def parse_facts(raw: str) -> List[str]:
         # Lines about the passages rather than facts from them ("The guide
         # mentions…", "It references…") and OCR noise ("pw2PIEIHGwgéÇ2REIIFIh")
         t = re.sub(r"^\([^)]{0,80}\)\s*", "", t)            # "(FM 21-10 Field Hygiene) …"
+        if re.match(r"^(not (explicitly|directly|clearly)?\s*(listed|stated|provided|mentioned|given|"
+                    r"described|specified|found)|no (information|mention|details?)|none (given|found))\b",
+                    t, flags=re.I):
+            continue            # "Not explicitly listed, but …", "Not provided in the passages"
         if re.match(r"^(the (passage|passages|text|source|guide|book|document|author)s?|it|this|they)\s+"
                     r"(describe|describes|mention|mentions|list|lists|discuss|discusses|talk|talks|"
                     r"refer|refers|reference|references|highlight|highlights|note|notes|emphasi[sz]es?|"
@@ -227,6 +234,8 @@ _GENERIC = {
     "opinion", "love", "loved", "favourite", "favorite", "ever", "know", "knew", "about",
     "real", "person", "based", "who's", "what's", "happened", "happen",
     "movies", "films", "shows", "books", "songs", "albums", "bands",
+    "he's", "she's", "they're", "we're", "you're", "isn't", "aren't", "won't", "doesn't",
+    "someone", "somebody", "person", "people", "friend", "help", "happening", "right",
     "okay", "ok", "yeah", "yes", "no", "well", "hey", "hi", "hmm", "thanks", "um", "so",
     "knowledge", "stuff", "instructions", "instruction", "steps", "step", "guide",
     "process", "diagrams", "build", "building", "simple", "easy", "quick", "basic", "list",
@@ -244,26 +253,77 @@ def subject_words(text: str) -> List[str]:
     return out
 
 
-def relevant(message: str, passage: str) -> bool:
-    """
-    Does the passage talk about what they asked? Its subject words appear in
-    it (all of one or two, half of three or more) — a near spelling counts
-    ("posionous").
-    A message with no subject words ("who are you") can't be judged → True.
-    """
+def _seen(message: str, passage: str) -> Tuple[List[str], List[bool]]:
+    """The message's subject words, and whether each is in the passage
+    (a near spelling counts — "posionous" —, so does a stem — "mushrooms")."""
     want = subject_words(message)
     if not want:
-        return True
-    have = set(re.findall(r"[a-z][a-z'-]+", (passage or "").lower()))
+        return [], []
+    low = (passage or "").lower()
+    have = set(re.findall(r"[a-z][a-z'-]+", low))
     stems = {h[:5] for h in have if len(h) >= 5}
 
     def seen(w):
-        return (w in have or (len(w) >= 5 and w[:5] in stems) or w.rstrip("s") in have
-                or bool(difflib.get_close_matches(w, have, n=1, cutoff=0.85)))
-    hits = sum(1 for w in want if seen(w))
-    # One or two subject words: all of them ("xyzzy engine" isn't about any
-    # engine); three or more: at least half ("mushrooms ireland" in a mushroom book)
-    return hits >= (len(want) if len(want) <= 2 else (len(want) + 1) // 2)
+        if w in have or (len(w) >= 5 and w[:5] in stems) or w.rstrip("s") in have:
+            return True
+        if w[:2] not in low:                     # quick no: not even close
+            return False
+        return bool(difflib.get_close_matches(w, have, n=1, cutoff=0.85))
+    return want, [seen(w) for w in want]
+
+
+def coverage(message: str, passage: str) -> Tuple[int, int]:
+    """(how many of the message's subject words the passage has, how many there are)."""
+    want, seen = _seen(message, passage)
+    return sum(seen), len(want)
+
+
+def weighted_share(message: str, passage: str, weights: Optional[Dict[str, float]] = None) -> float:
+    """
+    Share of the message's subject words in the passage, rare words counting
+    more (weights from the library's word index: "soap" outweighs "wood" and
+    "ash", so a paper-mill passage about wood and soda ash doesn't pass for
+    soap-making). Words found nowhere in the library weigh nothing.
+    """
+    want, seen = _seen(message, passage)
+    if not want:
+        return 0.5
+    w = [weights.get(x, 1.0) for x in want] if weights else [1.0] * len(want)
+    if sum(w) <= 0:                               # none of them are in the books at all
+        w = [1.0] * len(want)
+    return sum(wi for wi, s in zip(w, seen) if s) / sum(w)
+
+
+def relevant(message: str, passage: str, weights: Optional[Dict[str, float]] = None) -> bool:
+    """
+    Does the passage talk about what they asked?
+    One or two subject words: all of them ("xyzzy engine" isn't about any
+    engine). Three or more: at least half — by weight when the library's word
+    weights are given, so the rare, telling words must be there.
+    A message with no subject words ("who are you") can't be judged → True.
+    """
+    want, seen = _seen(message, passage)
+    if not want:
+        return True
+    if len(want) <= 2:
+        return all(seen)
+    if weights:
+        return weighted_share(message, passage, weights) >= 0.5
+    return sum(seen) >= (len(want) + 1) // 2
+
+
+def steps_block(passages: List[Tuple[str, str]], message: str, words: int = 170) -> str:
+    """
+    A how-to question: the books' own text, from the line that matches
+    onward (core/answers/confidence.trim_passage) — the steps stay complete
+    and in order. The librarian's summary of them lost steps and mixed books
+    (the owner's bench: soap with lemon juice and no lye).
+    """
+    from core.answers.confidence import trim_passage
+    body = "\n\n".join(f"[{label}] {trim_passage(text, message, words)}" for label, text in passages)
+    return ("The steps as the books give them — give them in order in your own words, keep amounts, "
+            "times and temperatures exactly, and leave out anything that isn't about their question. "
+            + NO_LINKS + ":\n" + body)
 
 
 def loose_block(passages: List[Tuple[str, str]], message: str, words: int = 110) -> str:
@@ -288,18 +348,28 @@ def _cut(text: str, words: int) -> str:
     return " ".join(w[:words]) + (" …" if len(w) > words else "")
 
 
-def _numbered(passages: List[Tuple[str, str]], budget: int = MAX_PASSAGE_WORDS) -> str:
-    """[1] (source) text … — shared fairly within `budget` words."""
+def _numbered(passages: List[Tuple[str, str]], budget: int = MAX_PASSAGE_WORDS,
+              question: str = "") -> str:
+    """
+    [1] (source) text … — shared fairly within `budget` words, each passage
+    cut to the stretch around the question's words. (It used to be each
+    passage's FIRST words: a 400-word passage cut to 126 words often lost
+    the part that answered — the soap guide's lye steps among them.)
+    """
+    from core.answers.confidence import trim_passage
     each = max(50, budget // max(1, len(passages)))
-    return "\n\n".join(f"[{i}] ({label}) {_cut(text, each)}"
+    return "\n\n".join(f"[{i}] ({label}) " + (trim_passage(text, question, each) if question
+                                                else _cut(text, each))
                        for i, (label, text) in enumerate(passages, 1))
 
 
 def facts_block(facts: Facts, what: str = "this") -> str:
     """The part of the speaker's prompt that carries the librarian's findings."""
     if facts.found:
-        return ("LIBRARY FACTS for " + what + " — state facts only from these and from what was "
-                "already said in this conversation; say them in your own words, never add any. "
-                + NO_LINKS + ":\n" + facts.text)
+        # Without the [1] [2] markers — the speaker copied them into replies
+        plain = re.sub(r"\s*\[\d+\]", "", facts.text)
+        return ("What the library says about " + what + " — state facts only from this and from "
+                "what's already been said here, in your own words, without a heading. " + NO_LINKS
+                + ":\n" + plain)
     return ("(Nothing new in the library for this. If the conversation above already "
             "answers it, answer from that. Otherwise tell them you don't have it — no guessing.)")

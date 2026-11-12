@@ -11,28 +11,23 @@ import re
 from typing import List, Dict, Tuple, Optional
 
 
-# Pairs of opposing terms that signal contradiction
+# Pairs of opposing terms that signal contradiction. Bare "do"/"do not" and
+# "should"/"should not" were dropped: nearly any two passages have them, and
+# the log-shelter answer turned into a "Source A says… Source B says…" script.
 OPPOSING_PAIRS = [
-    # Action opposites
-    (r'\bdo\b', r'\bdo not\b'),
-    (r'\bshould\b', r'\bshould not\b'),
-    (r'\bsafe\b', r'\bdangerous\b'),
-    (r'\bedible\b', r'\btoxic\b'),
-    (r'\bcan eat\b', r'\bnot eat\b'),
-    (r'\bboil\b', r'\bdo not boil\b'),
-    (r'\badd\b', r'\bdo not add\b'),
-    (r'\bapply\b', r'\bdo not apply\b'),
-
-    # Quantity opposites (different numbers for same thing)
-    # Detected separately via numeric comparison
-
-    # Outcome opposites
+    (r'\bsafe\b', r'\b(dangerous|unsafe|not safe)\b'),
+    (r'\bedible\b', r'\b(toxic|poisonous|inedible|not edible)\b'),
+    (r'\bcan eat\b', r'\b(not eat|never eat|cannot eat)\b'),
+    (r'\bboil\b', r"\b(do not|don't|never) boil\b"),
+    (r'\badd\b', r"\b(do not|don't|never) add\b"),
+    (r'\bapply\b', r"\b(do not|don't|never) apply\b"),
     (r'\bcures\b', r'\bdoes not cure\b'),
     (r'\beffective\b', r'\bineffective\b'),
     (r'\bworks\b', r'\bdoes not work\b'),
     (r'\bincreases\b', r'\bdecreases\b'),
-    (r'\brightens\b', r'\bdarkens\b'),
 ]
+
+UNIT = r'(mg|ml|g|kg|cm|mm|°c|°f|%|minutes?|hours?|days?|litres?|liters?)'
 
 # High-risk topics where contradiction is most dangerous
 HIGH_RISK_CONTRADICTION_TOPICS = {
@@ -49,114 +44,81 @@ class ContradictionDetector:
         self,
         chunks: List[Dict],
         tab_id: str = "",
+        query: str = "",
     ) -> Tuple[bool, Optional[str]]:
         """
-        Check top chunks for contradictions.
-        Returns (has_contradiction, description).
+        Do the top passages disagree about what was asked?
+
+        Step 1: only passages that mention the subject
+        Step 2: only SENTENCES that name the subject — "boil it" in a passage
+                about pottery doesn't contradict "do not boil" about wounds
+        Step 3: opposing claims (safe / dangerous, edible / toxic …), or
+                numbers in the SAME unit more than 2x apart
         """
+        from core.ai.librarian import coverage, subject_words
+        if query and subject_words(query):
+            chunks = [c for c in chunks if coverage(query, c.get("content", ""))[0] >= 1]
         if len(chunks) < 2:
             return False, None
+        words = subject_words(query) if query else []
 
-        # Focus on top 3 chunks
-        top = chunks[:3]
-        texts = [c.get("content", "").lower() for c in top]
-        sources = [c.get("source", "unknown") for c in top]
+        def about(text: str) -> List[str]:
+            sentences = [x for x in re.split(r"(?<=[.!?;:])\s+", text.lower()) if x.strip()]
+            if not words:
+                return sentences
+            return [x for x in sentences if any(w[:5] in x for w in words)]
 
-        # Check opposing pairs
-        for text_a, text_b in zip(texts, texts[1:]):
+        top = [" ".join(about(c.get("content", ""))) for c in chunks[:3]]
+        for text_a, text_b in zip(top, top[1:]):
             result = self._check_pair(text_a, text_b)
             if result:
                 return True, result
-
-        # Check numeric disagreement on quantities
-        nums_a = self._extract_numbers(texts[0])
-        nums_b = self._extract_numbers(texts[1])
-        numeric_conflict = self._numeric_conflict(nums_a, nums_b)
-        if numeric_conflict:
-            return True, numeric_conflict
-
+        conflict = self._numeric_conflict(self._extract_numbers(top[0]), self._extract_numbers(top[1]))
+        if conflict:
+            return True, conflict
         return False, None
 
     def _check_pair(self, text_a: str, text_b: str) -> Optional[str]:
-        """Check two text chunks for opposing claims."""
+        """One says X, the other says the opposite (and neither says both)."""
         for pos_pat, neg_pat in OPPOSING_PAIRS:
-            a_has_pos = bool(re.search(pos_pat, text_a))
-            a_has_neg = bool(re.search(neg_pat, text_a))
-            b_has_pos = bool(re.search(pos_pat, text_b))
-            b_has_neg = bool(re.search(neg_pat, text_b))
-
-            # One source says positive, other says negative
-            if (a_has_pos and not a_has_neg) and (b_has_neg and not b_has_pos):
-                pos_word = pos_pat.replace(r'\b', '').strip()
-                neg_word = neg_pat.replace(r'\b', '').strip()
-                return (
-                    f"Sources appear to disagree: "
-                    f"one suggests '{pos_word}' while another suggests '{neg_word}'."
-                )
-            if (a_has_neg and not a_has_pos) and (b_has_pos and not b_has_neg):
-                pos_word = pos_pat.replace(r'\b', '').strip()
-                neg_word = neg_pat.replace(r'\b', '').strip()
-                return (
-                    f"Sources appear to disagree: "
-                    f"one suggests '{neg_word}' while another suggests '{pos_word}'."
-                )
-
+            a_pos, a_neg = re.search(pos_pat, text_a), re.search(neg_pat, text_a)
+            b_pos, b_neg = re.search(pos_pat, text_b), re.search(neg_pat, text_b)
+            if a_pos and not a_neg and b_neg and not b_pos:
+                return f"one says '{a_pos.group(0)}', another says '{b_neg.group(0)}'"
+            if a_neg and not a_pos and b_pos and not b_neg:
+                return f"one says '{a_neg.group(0)}', another says '{b_pos.group(0)}'"
         return None
 
-    def _extract_numbers(self, text: str) -> List[float]:
-        """Extract all numeric values from text."""
-        numbers = re.findall(
-            r'\b(\d+\.?\d*)\s*(?:mg|ml|g|kg|cm|mm|°C|°F|%|minutes?|hours?|days?|litres?|liters?)\b',
-            text
-        )
-        result = []
-        for n in numbers:
+    def _extract_numbers(self, text: str) -> List[Tuple[float, str]]:
+        """(value, unit) pairs — "10 minutes" and "10 mg" are never compared."""
+        out = []
+        for n, unit in re.findall(r'\b(\d+\.?\d*)\s*' + UNIT + r'(?![a-z])', text.lower()):
+            unit = unit.rstrip("s").replace("liter", "litre")
             try:
-                result.append(float(n))
+                out.append((float(n), unit))
             except ValueError:
                 pass
-        return result
+        return out
 
     def _numeric_conflict(
         self,
-        nums_a: List[float],
-        nums_b: List[float]
+        nums_a: List[Tuple[float, str]],
+        nums_b: List[Tuple[float, str]],
     ) -> Optional[str]:
         """
-        Detect conflicting numeric values.
-        Only flags when values differ by more than 2x with no overlap.
-        Uses rounded comparison to avoid float equality issues.
+        The same unit in both, no value within 10% of the other's, and the
+        largest more than 2x apart → the sources give different amounts.
         """
-        if not nums_a or not nums_b:
-            return None
-
-        # Round to 2dp to avoid float equality fragility
-        set_a = {round(n, 2) for n in nums_a}
-        set_b = {round(n, 2) for n in nums_b}
-
-        # Check for overlap within 10% tolerance
-        def near_match(a, b):
-            return abs(a - b) / max(abs(a), abs(b), 1) < 0.10
-
-        has_overlap = any(
-            near_match(a, b) for a in set_a for b in set_b
-        )
-
-        if has_overlap:
-            return None
-
-        a_max = max(set_a)
-        b_max = max(set_b)
-        if a_max > 0 and b_max > 0:
-            ratio = max(a_max, b_max) / min(a_max, b_max)
-            if ratio > 2.0:
-                return (
-                    f"Sources give different numeric values "
-                    f"({', '.join(str(n) for n in sorted(set_a)[:3])} vs "
-                    f"{', '.join(str(n) for n in sorted(set_b)[:3])}). "
-                    f"Use the more conservative value."
-                )
-
+        for unit in sorted({u for _, u in nums_a} & {u for _, u in nums_b}):
+            set_a = {round(v, 2) for v, u in nums_a if u == unit}
+            set_b = {round(v, 2) for v, u in nums_b if u == unit}
+            if any(abs(a - b) / max(abs(a), abs(b), 1) < 0.10 for a in set_a for b in set_b):
+                continue
+            a_max, b_max = max(set_a), max(set_b)
+            if a_max > 0 and b_max > 0 and max(a_max, b_max) / min(a_max, b_max) > 2.0:
+                return (f"the amounts differ ({', '.join(str(n) for n in sorted(set_a)[:3])} vs "
+                        f"{', '.join(str(n) for n in sorted(set_b)[:3])} {unit}); "
+                        "use the more conservative one")
         return None
 
     def format_contradiction_response(

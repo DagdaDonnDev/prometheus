@@ -87,6 +87,17 @@ class TestFromTheLog(unittest.TestCase):
         self.assertEqual(Facts("- a [1]\n- b [3]", True).cited(), {1, 3})
 
 
+class TestLibrarianReadsTheRightPart(unittest.TestCase):
+    def test_passage_cut_around_the_question(self):
+        # It used to get each passage's FIRST words — the intro, not the steps
+        from core.ai.librarian import _numbered
+        intro = "Soap has been made for thousands of years in many lands. " * 30
+        text = intro + "Making lye from wood ash: pour rainwater slowly through hardwood ash."
+        out = _numbered([("Soap guide", text)], 120, "How do I make lye from wood ash?")
+        self.assertIn("Making lye from wood ash", out)
+        self.assertLess(len(out.split()), 160)
+
+
 class TestPipelineWithTwoModels(unittest.TestCase):
     def setUp(self):
         from core.you.memory import Memory
@@ -102,15 +113,15 @@ class TestPipelineWithTwoModels(unittest.TestCase):
         return self.pipe.prepare_knowledge(tab, q, self.pipe.route(q, tab_id))
 
     def test_knowledge_tab_briefs_then_extracts(self):
-        out = self.prepare("how do i purify water", "survival")
+        out = self.prepare("why does boiling make water safe", "survival")
         models = [m for m, _, _ in self.llm.calls]
         # It names its subject, so no rewrite step (it turned "log shelter" into
         # "materials construction safety") — straight to the librarian
         self.assertEqual(models, [self.llm.config.librarian_model])
         # The librarian gets their own words, not the speaker's rewrite (it
         # turned "soap from fat" into "soap from coconut oil")
-        self.assertIn("QUESTION: how do i purify water", self.llm.calls[-1][2])
-        self.assertIn("LIBRARY FACTS", out.full_prompt)
+        self.assertIn("QUESTION: why does boiling make water safe", self.llm.calls[-1][2])
+        self.assertIn("What the library says", out.full_prompt)
         self.assertIn("Boil water for 1 minute", out.full_prompt)
         self.assertNotIn("Retrieved knowledge — use as primary source:\n[", out.full_prompt)
 
@@ -122,7 +133,7 @@ class TestPipelineWithTwoModels(unittest.TestCase):
         with mock.patch("core.library.wiki_lookup.find_articles", return_value=[]):
             out = self.prepare("hey how's it going", "prometheus")
         self.assertEqual(self.llm.calls, [])
-        self.assertNotIn("LIBRARY FACTS", out.full_prompt)
+        self.assertNotIn("What the library says", out.full_prompt)
 
     def test_chat_lookup_goes_through_the_librarian(self):
         from pathlib import Path
@@ -134,14 +145,23 @@ class TestPipelineWithTwoModels(unittest.TestCase):
         with mock.patch("core.library.wiki_lookup.find_articles", return_value=[("Inception (film)", art)]):
             out = self.prepare("have you seen inception", "prometheus")
         self.assertEqual([m for m, _, _ in self.llm.calls], [self.llm.config.librarian_model])
-        self.assertIn("LIBRARY FACTS", out.full_prompt)
+        self.assertIn("What the library says", out.full_prompt)
         self.assertNotIn("Christopher Nolan. Inception", out.full_prompt)     # no raw article text
         self.assertTrue(out.full_prompt.rstrip().split("\n")[-1].startswith("Right now:"))
 
-    def test_not_found_but_on_the_subject_reads_the_passages(self):
-        # The soap guide has "Making Lye from Wood Ash"; the librarian said NOT FOUND
-        self.llm.facts = "NOT FOUND"
+    def test_how_to_reads_the_steps_directly(self):
+        # Bench: the librarian's summary of the soap steps lost the lye. A how-to
+        # now gets the book's own steps, with no librarian call
         out = self.prepare("How do I make lye from wood ash?", "chemistry")
+        self.assertNotIn(self.llm.config.librarian_model, [m for m, _, _ in self.llm.calls])
+        self.assertIn("The steps as the books give them", out.full_prompt)
+        self.assertIn("Making Lye from Wood Ash", out.full_prompt)
+        self.assertTrue(out.sources)
+
+    def test_not_found_but_on_the_subject_reads_the_passages(self):
+        # The librarian said NOT FOUND to the soap guide; on-subject passages go to the speaker
+        self.llm.facts = "NOT FOUND"
+        out = self.prepare("explain how lye is made from wood ash", "chemistry")
         self.assertIn("FROM THE LIBRARY", out.full_prompt)
         self.assertIn("ash", out.full_prompt.split("FROM THE LIBRARY", 1)[1].lower())
         self.assertNotIn("Nothing new in the library for this", out.full_prompt)
@@ -245,16 +265,16 @@ class TestFromTheLog1110(unittest.TestCase):
             "- Add vegetable oil to sand or pumice; melt it [2]"])
         self.assertEqual(parse_facts("[2] The passage lists several authors and works"), [])
         self.llm.facts = raw
-        out = self.prepare("How do I make soap from fat?", "chemistry")
-        self.assertIn("LIBRARY FACTS", out.full_prompt)
+        out = self.prepare("tell me about soap made from fat", "chemistry")
+        self.assertIn("What the library says", out.full_prompt)
         self.assertIn("Pour lye into fat", out.full_prompt)
         self.assertIn("No links, file names", out.full_prompt)
 
     def test_librarian_gets_their_words_not_the_rewrite(self):
         self.llm.brief = "SEARCH: soap fat lye\nQUESTION: I want to make soap from coconut oil and lye."
-        self.prepare("How do I make soap from fat?", "chemistry")
+        self.prepare("tell me about soap made from fat", "chemistry")
         self.assertNotIn("coconut", self.llm.calls[-1][2])
-        self.assertIn("QUESTION: How do I make soap from fat?", self.llm.calls[-1][2])
+        self.assertIn("QUESTION: tell me about soap made from fat", self.llm.calls[-1][2])
 
     def test_entertainment_tab_reads_wikipedia(self):
         from core.you.tabs import Tab
@@ -308,6 +328,12 @@ class TestFromTheLog1110(unittest.TestCase):
         out = self.prepare("okay what do you know about magic the gathering", tab)
         self.assertIn("Wikipedia — Magic: The Gathering", out.sources)          # "okay" isn't a subject
 
+    def test_something_interesting_comes_from_the_library(self):
+        # Bench: "tell me something interesting" → "What's something interesting to you?"
+        out = self.prepare("tell me something interesting", "prometheus")
+        self.assertIn("They want you to tell them something interesting", out.full_prompt)
+        self.assertTrue(any(src.startswith("Wikipedia — ") for src in out.sources))
+
     def test_halo_the_game(self):
         from core.library.wiki_lookup import find_articles
         self.assertEqual([t for t, _ in find_articles("halo the game")], ["Halo (series)"])
@@ -345,3 +371,135 @@ class TestFromTheLog1110(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestReplyRoom(unittest.TestCase):
+    """Step-by-step answers were cut off mid-step at 300 tokens."""
+
+    def test_lengths(self):
+        from core.ai.llm import LLMEngine
+        from core.app.config import Config
+        llm = LLMEngine(Config())
+        self.assertGreaterEqual(llm.reply_tokens("procedure"), 600)
+        self.assertEqual(llm.reply_tokens("chat_neutral"), llm.config.max_tokens)
+        llm.config.low_power_active = True
+        self.assertLessEqual(llm.reply_tokens("procedure"), 450)
+        self.assertLessEqual(llm.reply_tokens("chat_neutral"), 220)
+
+    def test_go_on_continues(self):
+        from core.answers.pipeline import QueryPipeline, wants_continue
+        from core.ai.librarian import Librarian
+        from core.library.rag import KnowledgeBase
+        from core.you.memory import Memory
+        from core.you.tabs import TabManager
+        self.assertTrue(wants_continue("go on"))
+        self.assertTrue(wants_continue("Continue please"))
+        self.assertFalse(wants_continue("how do I continue a fire overnight in the rain"))
+        llm = FakeLLM(facts="NOT FOUND")
+        pipe = QueryPipeline(Memory(), KnowledgeBase(), llm)
+        tab = TabManager().get_tab("survival")
+        saved = list(tab.history)
+        self.addCleanup(setattr, tab, "history", saved)
+        tab.history = [{"role": "user", "content": "how do I purify water"},
+                       {"role": "assistant", "content": "1. Boil it…"}]
+        out = pipe.prepare_knowledge(tab, "go on", pipe.route("go on", "survival"))
+        self.assertIn("CONTINUE your last reply", out.full_prompt)
+
+
+class TestThinkItThrough(unittest.TestCase):
+    def test_when_it_thinks(self):
+        from core.ai.llm import LLMEngine
+        from core.app.config import Config
+        llm = LLMEngine(Config())
+        self.assertFalse(llm.thinks("qwen3:1.7b", "procedure"))          # off by default
+        llm.config.think_hard = True
+        self.assertTrue(llm.thinks("qwen3:1.7b", "procedure"))
+        self.assertFalse(llm.thinks("qwen3:1.7b", "chat_neutral"))       # small talk stays quick
+        self.assertFalse(llm.thinks("qwen3:1.7b", "emergency"))          # emergencies never wait
+        self.assertFalse(llm.thinks("hf.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF:latest", "procedure"))
+        llm.config.low_power_active = True
+        self.assertFalse(llm.thinks("qwen3:1.7b", "procedure"))
+
+    def test_stream_sends_think_and_reports_it(self):
+        # A stand-in for Ollama's streamed reply: thinking chunks, then the answer
+        import json
+        from unittest import mock
+        from core.ai.llm import LLMEngine
+        from core.app.config import Config
+        llm = LLMEngine(Config())
+        llm.config.think_hard = True
+        lines = [json.dumps({"message": {"thinking": "Let me think"}, "done": False}),
+                 json.dumps({"message": {"content": "Boil it."}, "done": False}),
+                 json.dumps({"message": {"content": ""}, "done": True, "done_reason": "stop"})]
+        sent = {}
+
+        class Resp:
+            status_code = 200
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def iter_lines(self): return [l.encode() for l in lines]
+
+        def post(url, json=None, stream=None, timeout=None):
+            sent.update(json)
+            return Resp()
+        got, thought = [], []
+        with mock.patch("core.ai.llm.requests.post", post):
+            llm.stream([{"role": "user", "content": "how"}], "sys", got.append, lambda t: None,
+                       lambda e: None, intent="procedure", model="qwen3:1.7b",
+                       on_thinking=lambda: thought.append(1))
+        self.assertTrue(sent["think"])
+        self.assertEqual(thought, [1])
+        self.assertEqual("".join(got), "Boil it.")
+
+
+class TestCutShort(unittest.TestCase):
+    def test_note_when_the_limit_is_hit(self):
+        import json
+        from unittest import mock
+        from core.ai.llm import LLMEngine, CUT_SHORT_NOTE
+        from core.app.config import Config
+        llm = LLMEngine(Config())
+        lines = [json.dumps({"message": {"content": "1. Fill the barrel"}, "done": False}),
+                 json.dumps({"message": {"content": ""}, "done": True, "done_reason": "length"})]
+
+        class Resp:
+            status_code = 200
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def iter_lines(self): return [l.encode() for l in lines]
+        done = []
+        with mock.patch("core.ai.llm.requests.post", lambda *a, **k: Resp()):
+            llm.stream([{"role": "user", "content": "how"}], "sys", lambda t: None, done.append,
+                       lambda e: None, intent="procedure", model="qwen3:1.7b")
+        self.assertTrue(done[0].endswith(CUT_SHORT_NOTE))
+
+
+class TestLoopGuard(unittest.TestCase):
+    """Bench: "how do I find north" repeated the same step three times."""
+
+    def test_stops_at_a_repeated_step(self):
+        import json
+        from unittest import mock
+        from core.ai.llm import LLMEngine
+        from core.app.config import Config
+        step = "Use the position of the sun to estimate the direction of north or south."
+        chunks = ["1. Find a stick and push it into flat ground.\n",
+                  f"2. {step}\n", f"3. {step}\n", "4. More text that never arrives.\n"]
+        lines = [json.dumps({"message": {"content": c}, "done": False}) for c in chunks]
+        lines.append(json.dumps({"message": {"content": ""}, "done": True}))
+
+        class Resp:
+            status_code = 200
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def iter_lines(self): return [l.encode() for l in lines]
+        done = []
+        with mock.patch("core.ai.llm.requests.post", lambda *a, **k: Resp()):
+            LLMEngine(Config()).stream([{"role": "user", "content": "q"}], "s", lambda t: None,
+                                       done.append, lambda e: None, intent="procedure", model="qwen3:1.7b")
+        self.assertEqual(done[0], f"1. Find a stick and push it into flat ground.\n2. {step}")
+
+    def test_short_lines_may_repeat(self):
+        from core.ai.llm import _repeat_point
+        text = "- Wear gloves.\n- Wear gloves.\n"
+        self.assertIsNone(_repeat_point(text, set(), [0]))

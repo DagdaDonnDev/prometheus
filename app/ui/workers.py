@@ -17,6 +17,7 @@ class LLMWorker(QThread):
     token_received = Signal(str)
     response_done  = Signal(str)
     error_occurred = Signal(str)
+    thinking       = Signal()          # the speaker is reasoning first (think_hard)
 
     def __init__(self, llm: LLMEngine, messages: list,
                  system_prompt: str, tab_id: str = "", intent: str = ""):
@@ -36,6 +37,7 @@ class LLMWorker(QThread):
             on_error=self.error_occurred.emit,
             tab_id=self.tab_id,
             intent=self.intent,
+            on_thinking=self.thinking.emit,
         )
 
 
@@ -151,6 +153,12 @@ class InitWorker(QThread):
         self.knowledge.initialize_vector_db(
             status_callback=self.status_update.emit
         )
+        # Word search over the whole library (built once, rebuilt when the
+        # library changes)
+        try:
+            self.knowledge.ensure_index(status_callback=self.status_update.emit)
+        except Exception:
+            pass
 
         # Initialize STT if enabled
         if self.config.stt_enabled:

@@ -1127,6 +1127,7 @@ class MainWindow(QMainWindow):
             intent=prepared.intent,
         )
         self._llm_worker.token_received.connect(self._on_token)
+        self._llm_worker.thinking.connect(lambda: self.chat_view.show_researching("Thinking it through"))
         self._llm_worker.response_done.connect(
             lambda full: self._on_response_done(tab, full)
         )
@@ -1136,6 +1137,7 @@ class MainWindow(QMainWindow):
     def _on_token(self, token: str):
         """Handle incoming token from LLM stream."""
         tracer.record_first_token()   # speak-start — only the first call counts
+        self.chat_view.hide_researching()   # "Thinking it through…" ends with the first word
         self.chat_view.append_token(token)
         self.tts.on_token(token)
 
@@ -1163,6 +1165,7 @@ class MainWindow(QMainWindow):
         if trace:   # which pictures went with the reply, for the log
             trace.images = [os.path.basename(p) for p in images or []]
         timing = self._finish_trace(full_response, tab)
+        self.chat_view.replace_reply(full_response)
         self.chat_view.finish_assistant_message(
             image_paths=images or None, sources=sources or None, **timing
         )

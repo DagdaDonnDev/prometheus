@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from core.answers.intent_router import IntentRouter, RoutingPlan
-from core.ai.librarian import Facts, facts_block, loose_block, relevant, subject_words
+from core.ai.librarian import Facts, facts_block, loose_block, relevant, steps_block, subject_words
 from core.library.figures import wants_picture
 from core.answers.tracer import short
 from core.answers.sufficiency_gate import SourceSufficiencyGate
@@ -59,7 +59,13 @@ FOLLOW_UP_STARTS = (
     "why", "how come", "how so", "what do you mean", "are you sure", "really",
     "says who", "based on what", "source", "proof", "explain", "but why",
     "yes but", "ok but", "okay but", "how do you know", "what makes",
+    "go on", "continue", "keep going", "carry on", "and then", "what next", "next step",
 )
+# "go on" after a reply that was cut short (or any reply): carry on from there
+CONTINUE_WORDS = ("go on", "continue", "keep going", "carry on", "and then", "what next",
+                  "next step", "more please", "finish it", "finish that")
+CONTINUE_NOTE = ("They want you to CONTINUE your last reply from exactly where it stopped. "
+                 "Don't repeat what you already said — pick up at the next step.")
 FOLLOW_UP_NOTE = (
     "FOLLOW-UP: they're asking about your previous answer. Explain the reasoning "
     "behind it, using the sources above. If the sources don't support something "
@@ -91,6 +97,24 @@ def leans_on_last(text: str) -> bool:
     """A short message that refers back ("what's the story of it?", "the game")."""
     q = text.lower()
     return len(q.split()) <= 10 and bool(_LEANS_BACK.search(q))
+
+
+_INTERESTING = re.compile(
+    r"\b(tell|teach|give|show) me (something|anything|a fact|some facts?|a thing)\b.*"
+    r"\b(interesting|cool|fun|new|random|surprising|weird|amazing)\b|"
+    r"\b(random|fun|interesting|cool) fact\b|\bsurprise me\b|\bteach me something\b|"
+    r"\btell me something\s*[.!?]*$", re.I)
+
+
+def wants_something_interesting(text: str) -> bool:
+    """ "tell me something interesting", "random fact", "surprise me" """
+    return bool(_INTERESTING.search(text.strip()))
+
+
+def wants_continue(text: str) -> bool:
+    """ "go on", "continue", "keep going" — carry on from the last reply."""
+    q = text.lower().strip(" ?!.")
+    return len(q.split()) <= 5 and q.startswith(CONTINUE_WORDS)
 
 
 def is_follow_up(text: str) -> bool:
@@ -288,9 +312,13 @@ class QueryPipeline:
             if trace:
                 trace.brief_ms = brief.ms
                 trace.brief_text = short(f"SEARCH {brief.search} | QUESTION {brief.question}", 300)
+        import time as _time
+        _searched = _time.time()
         knowledge_context, confidence_note = self.knowledge.search(
             query=search_q, routing_plan=routing_plan,
         )
+        if trace:
+            trace.search_ms = int((_time.time() - _searched) * 1000)
         scores = self.knowledge.get_last_scores()
         if trace:
             trace.retrieval.has_sources  = scores.get("has_sources", False)
@@ -312,7 +340,7 @@ class QueryPipeline:
             trace.sufficiency.avg_confidence = suff.avg_conf
 
         # Step 4: contradiction detection
-        has_contradiction, desc = self.contradiction.detect(raw_chunks, tab_id=tab.id)
+        has_contradiction, desc = self.contradiction.detect(raw_chunks, tab_id=tab.id, query=about)
         contradiction_instruction = ""
         if has_contradiction and desc:
             contradiction_instruction = self.contradiction.format_contradiction_response(
@@ -379,17 +407,23 @@ class QueryPipeline:
         candidates = [("book", i, self.knowledge.scorer._source_label(r.get("source", ""), r.get("domain", "")),
                        r.get("content", "")) for i, r in enumerate(used)]
         if wiki_sources:
-            candidates += [("wiki", None, label, text) for label, text in self._wiki_passages(search_q, 200)]
-        on_subject = [c for c in candidates if relevant(about, f"{c[2]} {c[3]}")]
+            candidates += [("wiki", None, label, text)
+                           for label, text in self._wiki_passages(search_q, 200, question=about)]
+        # Rare words count more (the library's word weights): "soap" must be in
+        # a passage about soap-making, not just "wood" and "ash" (a paper mill)
+        weights = getattr(self.knowledge, "word_weights", lambda t: {})(about)
+        on_subject = [c for c in candidates if relevant(about, f"{c[2]} {c[3]}", weights)]
         # Step 7c+: no book on the subject, or a section you made yourself (the
         # Entertainment one has no books — it "never worked") → search inside
         # Wikipedia's articles, not just their titles
-        if not routing_plan.is_strict and tab.id != "medical" and (
+        # (not when an article was already found by its title — "halo the game"
+        # also pulled in the article about haloes of light)
+        if not routing_plan.is_strict and tab.id != "medical" and not wiki_sources and (
                 getattr(tab, "custom", False) or not any(c[0] == "book" for c in on_subject)):
             have = {c[2] for c in candidates}
             extra = [("wiki", None, label, text) for label, text in self._wiki_search_passages(about)
                      if label not in have]
-            extra = [c for c in extra if relevant(about, f"{c[2]} {c[3]}")]
+            extra = [c for c in extra if relevant(about, f"{c[2]} {c[3]}", weights)]
             if extra:
                 candidates += extra
                 on_subject += extra
@@ -409,6 +443,19 @@ class QueryPipeline:
             on_subject = []
             if trace:
                 trace.librarian_text = "(not asked — the message names no subject)"
+        elif routing_plan.intent == Intent.PROCEDURE and any(c[0] == "book" for c in on_subject):
+            # A how-to: the books' own steps, complete and in order, from the
+            # line that matches — no librarian in between. Its summaries lost
+            # and mixed steps (bench: soap "with lemon juice", no lye; lye
+            # "heat the ash until dry"); the emergency path, which reads the
+            # steps directly, gave the best answer. Also ~1 s quicker.
+            low = getattr(self.config, "low_power_active", False)
+            books = [c for c in on_subject if c[0] == "book"][:2]
+            knowledge_context = steps_block([(c[2], c[3]) for c in books], user_input, 110 if low else 170)
+            shown = [c[1] for c in books]
+            wiki_shown = []
+            if trace:
+                trace.librarian_text = "(not asked — a how-to: the steps are read from the books directly)"
         elif use_librarian and candidates:
             if not on_subject:
                 # Nothing on the subject: don't ask it at all (saves ~0.5 s)
@@ -435,8 +482,20 @@ class QueryPipeline:
         # happened to come from. Otherwise only pictures on the passages used.
         # Either way the speaker is told what's shown — it said "I don't have
         # pictures" with one right under its reply.
-        images = list(dict.fromkeys(used[i]["image_path"] for i in shown if used[i].get("image_path")))
-        picture_lines = [self._source_line(used[i]) for i in shown if used[i].get("image_path")]
+        # A passage's page picture only if what's printed on it (caption,
+        # labels) is about the subject — a steam-boiler drawing came with an
+        # answer about a deep cut, a page captioned "84." with soap-making
+        from core.library.figures import page_shows
+        from core.ai.librarian import coverage
+
+        def fits(chunk) -> bool:
+            shows = page_shows(chunk.get("domain", ""), chunk.get("source", ""), chunk.get("page_num", 0))
+            return shows is None or coverage(about, shows)[0] >= 1
+        images, picture_lines = [], []
+        for i in shown:
+            if used[i].get("image_path") and fits(used[i]) and used[i]["image_path"] not in images:
+                images.append(used[i]["image_path"])
+                picture_lines.append(self._source_line(used[i]))
         asked = wants_picture(user_input)
         if asked:
             images, picture_lines = self._pictures_for(about, images, picture_lines)
@@ -457,7 +516,9 @@ class QueryPipeline:
 
         # Step 7f: say what they're following on from, so the speaker keeps the
         # thread (owner: "memory is a huge issue … not remembering context")
-        if about != user_input and prev:
+        if wants_continue(user_input) and prev:
+            knowledge_context = (CONTINUE_NOTE + "\n\n" + (knowledge_context or "")).strip()
+        elif about != user_input and prev:
             knowledge_context = (f'They\'re following on from their last question: "{prev}". '
                                  "Keep to that subject.\n\n" + (knowledge_context or "")).strip()
 
@@ -659,7 +720,8 @@ class QueryPipeline:
         wiki_notes, sources = ("", []) if origin else self._wikipedia_background(subject)
         sources = [f"Obsidian — {t}" for t, _ in own] + sources
         if wiki_notes and use_librarian:
-            passages += self._wiki_passages(subject, 250)
+            passages += self._wiki_passages(subject, 250,
+                                            question=f"{subject} {user_input}" if carried else user_input)
         elif wiki_notes:
             parts.append(("Earlier in this chat they asked about this — use it only if they "
                           "still are.\n" if carried else "") + wiki_notes)
@@ -704,6 +766,22 @@ class QueryPipeline:
             else:
                 parts.append(lead_in + facts_block(facts, "it"))
 
+        # Step 4c+: "tell me something interesting" — something true from their
+        # own Wikipedia, at random (it handed the question back: "What's
+        # something interesting to you?")
+        if wants_something_interesting(user_input):
+            from core.library.wiki_lookup import random_article, lead
+            pick = random_article()
+            if pick:
+                title, path = pick
+                parts.append(f"They want you to tell them something interesting. Share this, from their "
+                             f"library, in 2-3 sentences of your own, then you may ask what they think "
+                             f"— don't hand the question back:\n{title}: {lead(path, 90)}")
+                sources = sources + [f"Wikipedia — {title}"]
+            else:
+                parts.append("They want you to tell them something interesting: share one surprising, "
+                             "true thing you're sure of, in 2-3 sentences — don't hand the question back.")
+
         # Step 4d: a picture asked for here too ("show me a picture of a bow
         # drill") — the figure page that shows it, from any book
         images = []
@@ -712,6 +790,10 @@ class QueryPipeline:
                 user_input if subject_words(user_input) else question, [], [])
             parts.append(picture_note(lines, True))
             sources = sources + [l.split(" — ")[0] for l in lines]
+
+        # Step 4e: "go on" — carry on from the last reply, don't start again
+        if wants_continue(user_input) and tab is not None and previous_question(tab, user_input):
+            parts.append(CONTINUE_NOTE)
 
         # Step 5: how to sound right now — read from their message in code,
         # last in the prompt (a small model can't pick tone up on its own)
@@ -788,10 +870,13 @@ class QueryPipeline:
                 f'database." Don\'t guess, and don\'t describe it from memory.')
 
     @staticmethod
-    def _wiki_passages(text: str, words: int = 250):
-        """[("Wikipedia — Title", opening ~words)] for the articles a message names."""
-        from core.library.wiki_lookup import find_articles, lead
-        return [(f"Wikipedia — {title}", lead(path, words))
+    def _wiki_passages(text: str, words: int = 250, question: str = ""):
+        """
+        [("Wikipedia — Title", ~words)] for the articles a message names — the
+        part of each that answers the question (wiki_lookup.passage_for).
+        """
+        from core.library.wiki_lookup import find_articles, passage_for
+        return [(f"Wikipedia — {title}", passage_for(path, title, question or text, words))
                 for title, path in find_articles(text, max_articles=2)]
 
     @staticmethod
@@ -802,7 +887,7 @@ class QueryPipeline:
         The Gathering). "May refer to" pages are skipped.
         """
         from core.ai.librarian import subject_words
-        from core.library.wiki_lookup import search, lead, _is_disambiguation
+        from core.library.wiki_lookup import search, passage_for, _is_disambiguation
         q = " ".join(subject_words(text))
         if not q:
             return []
@@ -812,7 +897,7 @@ class QueryPipeline:
                 path = r["path"]
                 if hasattr(path, "open") and _is_disambiguation(path):
                     continue
-                out.append((f"Wikipedia — {r['title']}", lead(path, words)))
+                out.append((f"Wikipedia — {r['title']}", passage_for(path, r["title"], text, words)))
                 if len(out) >= n:
                     break
         except Exception:

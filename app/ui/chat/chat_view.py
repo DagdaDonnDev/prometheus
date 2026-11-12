@@ -145,6 +145,11 @@ class MessageBubble(QFrame):
         if not PHONE_LAYOUT:
             self._menu_btn.setVisible(False)          # appears on hover
 
+        # Replies are shown as formatted text — bold, lists, headings — the way
+        # the model writes them (they showed as raw **stars** and ### marks).
+        # Yours stay exactly as typed.
+        self._label.setTextFormat(Qt.MarkdownText if role == "assistant" else Qt.PlainText)
+
         # Yours: a soft bubble on the right. Replies: plain text across the
         # column, like a page — easier to read than a box
         if role == "user":
@@ -370,6 +375,11 @@ class ChatView(QWidget):
         if self._current_bubble:
             self._current_bubble.append_text(token)
             self._scroll_to_bottom()
+
+    def replace_reply(self, text: str):
+        """The reply as it finally is (a repeated step at the end was cut off)."""
+        if self._current_bubble is not None and self._current_bubble.get_text() != text:
+            self._current_bubble.set_text(text)
 
     def finish_assistant_message(self, image_paths: List[str] = None,
                                  first_token_ms: int = 0, response_ms: int = 0,

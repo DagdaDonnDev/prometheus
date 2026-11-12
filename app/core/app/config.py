@@ -53,6 +53,11 @@ class Config:
     # (each one waits in the Review tab until you accept it)
     notice_facts: bool = True
 
+    # Think it through first on hard questions (steps, explanations,
+    # diagnosis) — the speaker reasons before answering: slower, more careful.
+    # Only models that can (Qwen3 …), never in low power.
+    think_hard: bool = False
+
     # Voice
     voice_enabled: bool = True
     stt_enabled: bool = True

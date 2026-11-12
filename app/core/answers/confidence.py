@@ -283,50 +283,24 @@ class ConfidenceScorer:
         """
         Build a note to append to system prompt about source confidence.
         """
+        # Short and without book file names: "Multiple high-confidence sources
+        # agree (soap_from_ash_and_fat, …)" came back as "Source: …" lines, and
+        # "tell the user this explicitly" as talk about sources in replies.
         if not results:
-            return (
-                "No specific knowledge found for this query. "
-                "Reason from first principles and clearly state uncertainty."
-            )
+            return ""
 
         levels = [r.get("confidence", {}).get("level", "UNKNOWN") for r in results]
-        sources = [r.get("confidence", {}).get("source", "unknown") for r in results]
-
         high_count = levels.count("HIGH")
         uncertain_count = levels.count("UNCERTAIN") + levels.count("LOW")
 
         notes = []
-
         if is_critical:
-            notes.append(
-                "⚠ CRITICAL DOMAIN: This query involves safety-critical information. "
-                "Always state your confidence level explicitly in the response."
-            )
-
-        if high_count >= 2:
-            notes.append(
-                f"Multiple high-confidence sources agree ({', '.join(set(sources))}). "
-                "You can answer with confidence but still note the source."
-            )
-        elif high_count == 1:
-            notes.append(
-                "One high-confidence source found. "
-                "Answer helpfully but acknowledge this is a single source."
-            )
-        elif uncertain_count > 0:
-            notes.append(
-                "Sources for this query have lower confidence. "
-                "Be helpful but clearly flag uncertainty. "
-                "Suggest the user verify before acting on medical or safety information."
-            )
-
-        if uncertain_count >= 2:
-            notes.append(
-                "The redundancy principle was not met — "
-                "two independent high-confidence sources not found. "
-                "Tell the user this explicitly."
-            )
-
+            notes.append("This is safety-critical: be exact, and say plainly if something isn't certain.")
+        if high_count == 0 and uncertain_count > 0:
+            notes.append("These passages are less reliable than usual — if it matters for safety, "
+                         "say it's worth double-checking.")
+        if is_critical and uncertain_count >= 2:
+            notes.append("Only one good source covers this — suggest checking before acting on it.")
         return " ".join(notes)
 
 
@@ -377,10 +351,8 @@ class RedundancyChecker:
             return True, f"Confirmed by {len(unique_sources)} independent sources."
 
         if len(unique_sources) == 1:
-            return False, (
-                f"Only one source found: {list(unique_sources)[0]}. "
-                "For critical information, a second source is recommended."
-            )
+            # No book file name here — it came back in replies as "Source: …"
+            return False, "Only one book covers this — for anything critical, a second check is worth it."
 
         return False, "No high-confidence sources found for this query."
 
@@ -403,8 +375,8 @@ def trim_passage(text: str, query: str, max_words: int = 130) -> str:
 
     Step 1: split into sentences
     Step 2: find the sentence sharing the most words with the query
-    Step 3: grow the window one sentence at a time (after, then before)
-            until it reaches max_words
+    Step 3: grow the window from there — forward first (steps follow their
+            heading), then back — until it reaches max_words
     """
     import re as _re
     words = text.split()
@@ -414,8 +386,12 @@ def trim_passage(text: str, query: str, max_words: int = 130) -> str:
     q = {w for w in _re.findall(r"[a-z0-9]+", (query or "").lower())
          if len(w) > 2 and w not in _STOP_WORDS}
 
-    # Step 1
-    sentences = [s for s in _re.split(r"(?<=[.!?:])\s+", text) if s.strip()]
+    # Step 1 — sentences, and also headings, list items and numbered steps:
+    # PDF and markdown text often has no full stops, and a whole list counted
+    # as one "sentence" (the "not breathing" steps were lost that way)
+    sentences = [s for s in _re.split(
+        r"(?<=[.!?:])\s+|\s+(?=#{1,4}\s)|\s+---+\s+|\s+(?=[-•*]\s+[A-Za-z])|\s+(?=\d{1,2}[.)]\s+[A-Za-z])",
+        text) if s and s.strip()]
     if len(sentences) <= 1:
         # No punctuation (common in PDF text): window around the first query word
         hit = next((i for i, w in enumerate(words)
@@ -425,20 +401,37 @@ def trim_passage(text: str, query: str, max_words: int = 130) -> str:
         return ("… " if start else "") + " ".join(window) + (" …" if start + max_words < len(words) else "")
 
     # Step 2
-    def score(s):
-        return len(q & set(_re.findall(r"[a-z0-9]+", s.lower())))
-    best = max(range(len(sentences)), key=lambda i: score(sentences[i]))
+    q_stems = {w[:5] for w in q if len(w) >= 5}
 
-    # Step 3
+    def score(i):
+        s = sentences[i]
+        words = set(_re.findall(r"[a-z0-9]+", s.lower()))
+        base = len(q & words) + 0.5 * len(q_stems & {w[:5] for w in words if len(w) >= 5} - {
+            w[:5] for w in q & words if len(w) >= 5})
+        # A heading that introduces steps beats a passing mention: "If person
+        # is unconscious and not breathing:" followed by "1. …"
+        nxt = sentences[i + 1].strip().lower() if i + 1 < len(sentences) else ""
+        if base and s.rstrip().endswith(":"):
+            base += 0.6
+        elif base and _re.match(r"^(\d+[.)]|step\b)", nxt):
+            base += 0.4
+        return base
+    best = max(range(len(sentences)), key=score)
+
+    # Step 3 — forward first: steps and details follow the line that matched
+    # (it grew both ways evenly, and cut the "not breathing" steps off at "1.")
     lo = hi = best
+    last = len(sentences) - 1
     count = len(sentences[best].split())
-    while count < max_words and (lo > 0 or hi < len(sentences) - 1):
-        if hi < len(sentences) - 1:
+    while count < max_words and (lo > 0 or hi < last):
+        if hi < last and (count < 0.75 * max_words or lo == 0):
             hi += 1
             count += len(sentences[hi].split())
-        if count < max_words and lo > 0:
+        elif lo > 0:
             lo -= 1
             count += len(sentences[lo].split())
+        else:
+            break
     out = " ".join(sentences[lo:hi + 1])
     out_words = out.split()
     if len(out_words) > max_words + 40:          # one very long sentence

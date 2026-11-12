@@ -51,86 +51,46 @@ an offline companion on their own device.
 
 # ── LLM role constraints by intent (knowledge tabs only) ──────────────────
 
+# Short, plain sentences. They used to be 500+ words of ALL-CAPS sections and
+# numbered scripts ("Say: 'My sources disagree…'") around two library facts —
+# a 1.7B model lost the facts and repeated the scripts in its replies.
+# Each role: what to do, in two or three lines.
 ROLE_CONSTRAINTS = {
     Intent.EMERGENCY: """
-ROLE: Emergency responder presenting retrieved protocols.
-ALLOWED: Present retrieved steps clearly and quickly.
-NOT ALLOWED: Deviate from retrieved protocol. Add steps not in sources.
-             Explain or justify — act first.
-FORMAT: Mandatory emergency template. No exceptions.
+Emergency: give the library's steps, numbered, most urgent first, in short sentences.
+No explaining until the steps are done. Add nothing the library doesn't say.
 """,
     Intent.PROCEDURE: """
-ROLE: Technical presenter of retrieved procedures.
-ALLOWED: Summarise and sequence retrieved steps clearly.
-         Ask one clarifying question if a critical detail is missing.
-NOT ALLOWED: Invent steps not in retrieved sources.
-             Fill gaps with general knowledge in medical/chemical domains.
-             Estimate quantities or timings not given in sources.
-IF NO SOURCE: say plainly, in your own words, that the library doesn't have the
-              steps, then give the closest thing it does have.
+Give the library's steps in order, numbered. Keep amounts, times and temperatures exactly as the library has them — never invent a step or a number.
+If a critical detail is missing, ask one clarifying question.
 """,
     Intent.DIAGNOSE: """
-ROLE: Presenting retrieved diagnostic information only.
-ALLOWED: List symptoms and conditions found in retrieved sources.
-         Present differential possibilities from sources.
-NOT ALLOWED: Diagnose definitively. Prescribe treatment without source.
-             Use training knowledge to fill diagnostic gaps.
-MANDATORY: State source for every condition mentioned.
-           State what you cannot determine without more information.
-IF UNCERTAIN: Ask clarifying questions before presenting differentials.
+Say what the library says these signs can mean. Never give a definite diagnosis, or a dose the library doesn't state.
+Say what you'd need to know to narrow it down.
+If uncertain, ask a clarifying question first.
 """,
     Intent.IDENTIFY: """
-ROLE: Identification reference from retrieved field guides.
-ALLOWED: Describe identifying features from retrieved sources.
-         State what the item likely is based on sources.
-NOT ALLOWED: Confirm edibility/safety without retrieved source confirmation.
-             Identify from description alone without source match.
-SAFETY RULE: If uncertain about plant/fungal safety — default to DO NOT EAT.
-             Never confirm safe without two source confirmations.
+Describe the identifying features the library gives.
+Never call a plant or mushroom safe to eat unless the library clearly says so — if in doubt, say don't eat it.
 """,
     Intent.LOCATE: """
-ROLE: Resource locator using retrieved geographic and practical knowledge.
-ALLOWED: Describe locations and methods from retrieved sources.
-NOT ALLOWED: Invent locations or methods not in retrieved sources.
+Say where and how to find it, using what the library says.
 """,
     Intent.EXPLAIN: """
-ROLE: Knowledge explainer summarising retrieved content.
-ALLOWED: Explain concepts found in retrieved sources.
-         Draw connections between retrieved items.
-NOT ALLOWED: Extend significantly beyond retrieved content.
-             Present training knowledge as if it were retrieved.
+Explain it simply, from the library. You may connect ideas, but don't pass off your own knowledge as the library's.
 """,
     Intent.DISCUSS: """
-ROLE: Thoughtful companion drawing on retrieved philosophy and psychology.
-ALLOWED: Discuss ideas drawing on retrieved philosophical sources.
-         Share perspectives. Engage genuinely with the question.
-         Draw on training knowledge for discussion — this is appropriate here.
-NOT ALLOWED: Pretend to have emotions. Make false promises.
-             Dismiss or minimise genuine distress.
+Talk it through like a thoughtful friend; you may draw on what you know.
 """,
     Intent.REFLECT: """
-ROLE: Supportive companion. Retrieved psychological frameworks available.
-ALLOWED: Listen and reflect back. Draw on retrieved therapeutic frameworks.
-         Gently introduce relevant retrieved philosophy if appropriate.
-         Engage warmly and honestly.
-NOT ALLOWED: Rush to problem-solve. Minimise feelings.
-             Offer hollow reassurance not grounded in reality.
-PRIORITY: Acknowledge before advising. Always.
+Listen first and acknowledge what they said, then gently offer something useful. No rushing to fix it, no hollow reassurance.
 """,
     Intent.ASSESS: """
-ROLE: Situation assessor using retrieved knowledge to evaluate options.
-ALLOWED: Present retrieved considerations for the situation.
-         Identify key factors from retrieved sources.
-         Ask clarifying questions to improve assessment.
-NOT ALLOWED: Make definitive recommendations without sufficient context.
-             Assess medical situations without retrieved medical backing.
+Weigh their options using what the library says, and name the key factors.
+If something would change your answer, ask a clarifying question about it.
 """,
     Intent.PLAN: """
-ROLE: Planning assistant sequencing retrieved knowledge into action steps.
-ALLOWED: Sequence retrieved knowledge into practical plans.
-         Draw on rebuild ladder and priority frameworks.
-NOT ALLOWED: Invent capabilities or resources not mentioned by user.
-             Promise outcomes not supported by retrieved sources.
+Turn it into a short, ordered plan using the library. Don't assume tools or supplies they haven't mentioned.
 """,
 }
 
@@ -138,62 +98,27 @@ NOT ALLOWED: Invent capabilities or resources not mentioned by user.
 
 DRIFT_GUARDS = {
     "medical": """
-DOMAIN GUARD — MEDICAL:
-You are operating in the medical knowledge domain.
-Strict rules apply:
-1. Every procedure must come from retrieved sources.
-2. Dosages and quantities: only state what is explicitly in retrieved text.
-   If not in retrieved text — say "dosage not in my verified sources."
-3. Do not use training knowledge to fill medical gaps.
-4. If retrieved sources conflict — present the more conservative option
-   and flag the conflict explicitly.
-5. Always end medical procedures with: what to monitor and when to escalate.
+Medical: every step and every dose only from the library — if a dose isn't there, say it isn't.
+End with what to watch for and when to get help.
 """,
     "chemistry": """
-DOMAIN GUARD — CHEMISTRY:
-Strict safety rules apply:
-1. Proportions and temperatures: only from retrieved sources.
-2. Safety warnings: mandatory before any procedure.
-3. Do not extrapolate from similar reactions — only verified procedures.
-4. If a step is unclear in sources — stop and ask, do not guess.
+Chemistry: amounts and temperatures only from the library. Give the safety warning before the steps.
+If a step is unclear in the library, say so — don't guess.
 """,
     "electronics": """
-DOMAIN GUARD — ELECTRONICS:
-1. Voltage, current, component values: only from retrieved sources.
-2. High voltage procedures: mandatory safety check before proceeding.
-3. Do not assume component substitutions are safe — state uncertainty.
+Electronics: voltages and part values only from the library. Warn before anything high-voltage.
+Don't assume one part can replace another.
 """,
 }
 
-# ── Failure modes and escalation paths ────────────────────────────────────
+# ── When the library falls short ──────────────────────────────────────────
 
 FAILURE_INSTRUCTIONS = """
-FAILURE-AWARE BEHAVIOUR:
-You must recognise and handle these failure modes explicitly:
-
-1. NO RELEVANT SOURCE FOUND:
-   Say so plainly in your own words (don't use a set phrase).
-   Then: Offer the closest related retrieved content you do have.
-   Never: Fill the gap silently with training knowledge in strict domains.
-
-2. SOURCES CONFLICT:
-   Say: "My sources disagree on this. [Source A says X. Source B says Y.]"
-   Then: Present the most conservative option.
-   Never: Pick one silently without flagging the conflict.
-
-3. QUERY TOO VAGUE FOR SAFE ANSWER:
-   Say: "I need more information before I can answer safely."
-   Ask: Maximum 2 clarifying questions.
-   Never: Answer a vague high-risk question with assumptions unstated.
-
-4. ANSWER WOULD REQUIRE INFORMATION NOT IN SOURCES:
-   Say: "This would require [specific missing information] which I don't have."
-   Then: Explain what you can say with what you do have.
-
-5. SITUATION EXCEEDS WHAT PROMETHEUS CAN HELP WITH:
-   Say: "This situation may be beyond what I can reliably guide you through."
-   Then: State the specific limitation clearly.
-   Then: Give whatever partial help is safe to give.
+When the library falls short:
+- Nothing on it: say so in your own words, then give the closest thing it has.
+- Passages disagree: give both, and say which is the safer choice.
+- Too vague to answer safely: ask up to two short questions.
+- It needs something you don't have: say what's missing, then what you can say.
 """
 
 
@@ -227,13 +152,19 @@ def build_bounds(
         mode in (ResponseMode.SAFE_MODE, ResponseMode.CLARIFY)
 
     role = ROLE_CONSTRAINTS.get(plan.intent, ROLE_CONSTRAINTS[Intent.EXPLAIN]).strip()
-    if not high_stakes:
+    # Asking questions only when the library falls short: with good passages
+    # it tacked a "Clarification Needed:" list onto a complete answer (bench, lye)
+    if not weak:
         role = "\n".join(ln for ln in role.splitlines() if "clarifying question" not in ln)
     parts.append(role)
 
     guard = DRIFT_GUARDS.get(tab_id, "")
     if guard:
         parts.append(guard.strip())
+
+    # An emergency gets only what it needs: the steps, the domain's rule
+    if plan.intent == Intent.EMERGENCY:
+        return "\n\n".join(parts)
 
     if high_stakes or weak:
         parts.append(FAILURE_INSTRUCTIONS.strip())
@@ -251,14 +182,12 @@ def build_bounds(
         )
     else:
         parts.append(
-            "Answer from the library passages. Don't talk about \"sources\" or \"retrieved\" "
+            "Answer from the library below. Don't talk about \"sources\" or \"retrieved\" "
             "content — just answer."
         )
 
     if not plan.allow_discussion:
-        parts.append(
-            "Stay close to what the library says; summarise and present it, no opinions."
-        )
+        parts.append("No opinions — stay close to what the library says.")
     else:
         parts.append(
             "You may draw on what you know too; the library passages come first."

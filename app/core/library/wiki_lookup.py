@@ -225,6 +225,40 @@ def _titles():
     return _cache["titles"]
 
 
+def random_article(tries: int = 12) -> Optional[Tuple[str, object]]:
+    """
+    One article worth sharing, at random — for "tell me something
+    interesting" (the speaker handed the question back instead).
+    Skips "may refer to" pages, lists, years and stubs (under 60 words).
+    """
+    import random
+    titles = _titles()
+    if not titles:
+        return None
+    for _ in range(tries):
+        if isinstance(titles, _DbTitles):
+            with titles._lock:
+                top = titles._db.execute("SELECT max(rowid) FROM pages").fetchone()[0] or 0
+                row = titles._db.execute("SELECT key FROM pages WHERE rowid >= ? LIMIT 1",
+                                         (random.randint(1, max(1, top)),)).fetchone()
+            if not row:
+                continue
+            key, path = row[0], titles.get(row[0])
+        else:
+            keys = _cache.setdefault("keys", {}).get(id(titles))
+            if keys is None:
+                keys = list(titles.keys())
+                _cache["keys"] = {id(titles): keys}
+            key = random.choice(keys)
+            path = titles[key]
+        if path is None or re.match(r"^(list_of|lists_of|\d+$|\d+s?_)", key) or _is_disambiguation(path):
+            continue
+        if len(lead(path, 80).split()) < 60:
+            continue
+        return _title_of(path), path
+    return None
+
+
 def find_articles(text: str, max_articles: int = 2) -> List[Tuple[str, Path]]:
     """Articles the message is about: [(title, path)], best first."""
     titles = _titles()
@@ -417,6 +451,40 @@ def full_text_ready() -> bool:
         return True
     p = WIKI_DIR.parent / "wikipedia_search.sqlite"
     return p.exists() and p.stat().st_size > 0
+
+
+def passage_for(path, title: str, question: str, words: int = 200) -> str:
+    """
+    The part of an article that answers the question.
+
+    Step 1: a question just about the thing ("tell me about Halo") → the
+            article's opening
+    Step 2: one about something IN it ("what's the story of it?", "who made
+            it?") → the stretch that has those words, after the article's
+            first sentence (what the thing is). The opening alone often
+            didn't have the plot, the maker, the dates.
+    """
+    from core.ai.librarian import subject_words
+    from core.answers.confidence import trim_passage
+    title_words = set(re.findall(r"[a-z0-9]+", (title or "").lower()))
+    extra = [w for w in subject_words(question or "")
+             if w not in title_words and w.rstrip("s") not in title_words]
+    if not extra:
+        return lead(path, words)
+    text = read_article(path)
+    lines = text.splitlines()
+    if lines and lines[0].startswith("# "):
+        lines = lines[1:]
+    body = " ".join(" ".join(lines).split()[:6000])
+    low = body.lower()
+    if not any(w[:5] in low for w in extra):
+        return lead(path, words)
+    first = re.split(r"(?<=[.!?])\s+", body, maxsplit=1)[0]
+    first = " ".join(first.split()[:40])
+    part = trim_passage(body, " ".join(extra), words)
+    if first and first[:60] not in part:
+        part = first + " … " + part.lstrip("… ")
+    return part
 
 
 def read_article(path) -> str:

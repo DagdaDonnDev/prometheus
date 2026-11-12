@@ -59,6 +59,19 @@ class TestWiki(unittest.TestCase):
         self.assertEqual(self.titles("I loved Your Name"), ["Your Name"])
         self.assertEqual(self.titles("is your name a good film"), ["Your Name"])
 
+    def test_passage_answers_the_question(self):
+        # "what's the story of it?" — the plot is far below the article's opening
+        art = w.WIKI_DIR / "Halo_series.txt"
+        art.write_text("# Halo (series)\n\nHalo is a military science fiction video game series. "
+                       + "It sold many copies on many machines over many years. " * 60
+                       + "The story follows Master Chief, a super-soldier fighting the Covenant. "
+                       + "Reviews praised the music. " * 30, encoding="utf-8")
+        story = w.passage_for(art, "Halo (series)", "tell me about halo the game what's the story of it?", 80)
+        self.assertIn("Master Chief", story)
+        self.assertTrue(story.startswith("Halo is a military science fiction video game series."))
+        opening = w.passage_for(art, "Halo (series)", "tell me about halo", 80)
+        self.assertNotIn("Master Chief", opening)                      # just about it: the opening
+
     def test_disambiguation_prefers_the_real_article(self):
         self.assertEqual(self.titles("Have you seen Inception"), ["Inception (film)"])
 

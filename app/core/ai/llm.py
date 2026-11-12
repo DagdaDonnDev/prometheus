@@ -32,6 +32,34 @@ INTENT_TEMPERATURE = {
 
 DEFAULT_TEMPERATURE = 0.65
 
+# Step-by-step and explaining answers need room: 300 tokens cut instructions
+# off mid-step. Chat stays short (and quick).
+LONG_INTENTS = {"procedure", "plan", "explain", "diagnose", "assess", "identify", "emergency"}
+THINK_TOKENS = 1200          # room for the reasoning before the answer
+CUT_SHORT_NOTE = "\n\n*(That's where I had to stop — say \"go on\" for the rest.)*"
+
+
+def _repeat_point(text: str, seen: set, checked: list) -> Optional[int]:
+    """
+    Where a repeated line starts in `text` (None if no line repeats). Lines
+    are compared without their numbering ("4. Use the sun…" = "5. Use the
+    sun…"); only lines of 30+ characters count, so "- Wear gloves." twice
+    is fine.
+    """
+    import re
+    start = checked[0]
+    end = text.rfind("\n")
+    pos = start
+    for line in text[start:end].split("\n"):
+        key = re.sub(r"^[\W\d]*(?:step\s*\d+\W*)?", "", line.lower())
+        key = " ".join(key.split()).rstrip(" .:;,")
+        if len(key) >= 30:
+            if key in seen:
+                return pos
+            seen.add(key)
+        pos += len(line) + 1
+    return None
+
 
 def fast_local_url(url: str) -> str:
     """
@@ -155,6 +183,7 @@ class LLMEngine:
         tab_id: str = "",
         intent: str = "",
         model: str = "",
+        on_thinking: Optional[Callable[[], None]] = None,
     ):
         """
         Stream tokens from the speaker (the model that talks to you).
@@ -164,6 +193,10 @@ class LLMEngine:
         model = model or self.config.model_for_tab(tab_id)
         temperature = INTENT_TEMPERATURE.get(intent, DEFAULT_TEMPERATURE)
         in_think = False      # inside a <think> block a model wrote anyway
+        think = self.thinks(model, intent)
+        told_thinking = False
+        seen_lines: set = set()      # finished lines so far (loop guard)
+        checked = [0]                # how far full_response has been checked
 
         try:
             payload = {
@@ -173,16 +206,15 @@ class LLMEngine:
                 ] + messages,
                 "stream": True,
                 "keep_alive": self.config.keep_alive,
-                **_thinking_off(model),
+                **({"think": True} if think else _thinking_off(model)),
                 "options": {
                     "num_ctx":     self.config.context_window,
-                    # low power: shorter replies (each word costs more on a processor)
-                    "num_predict": (min(self.config.max_tokens, 220)
-                                    if getattr(self.config, "low_power_active", False)
-                                    else self.config.max_tokens),
+                    # thinking uses up reply tokens too — give it room
+                    "num_predict": self.reply_tokens(intent) + (THINK_TOKENS if think else 0),
                     "temperature": temperature,
                     "top_p":       0.9,
                     "repeat_penalty": 1.1,  # Reduce repetitive phrasing
+                    "repeat_last_n": 256,   # …over whole steps, not just the last 64 tokens
                 }
             }
 
@@ -203,6 +235,10 @@ class LLMEngine:
                     if line:
                         try:
                             data = json.loads(line)
+                            if not told_thinking and data.get("message", {}).get("thinking"):
+                                told_thinking = True       # say it's thinking, once
+                                if on_thinking:
+                                    on_thinking()
                             token = data.get("message", {}).get("content", "")
                             # Hide a <think>…</think> block if one comes through anyway
                             if token and (in_think or ("<think>" in token and not full_response.strip())):
@@ -211,8 +247,24 @@ class LLMEngine:
                             if token:
                                 full_response += token
                                 on_token(token)
+                                # Stuck in a loop? The bench caught the same step
+                                # three times over ("Use the position of the sun…").
+                                # A finished line said before → stop there.
+                                if "\n" in token:
+                                    cut = _repeat_point(full_response, seen_lines, checked)
+                                    checked[0] = full_response.rfind("\n") + 1
+                                    if cut is not None:
+                                        full_response = full_response[:cut].rstrip()
+                                        on_done(full_response)
+                                        return
 
                             if data.get("done"):
+                                # Hit the length limit mid-reply: say so, so it
+                                # doesn't just stop mid-step ("go on" continues)
+                                if data.get("done_reason") == "length" and full_response.strip():
+                                    note = CUT_SHORT_NOTE
+                                    full_response += note
+                                    on_token(note)
                                 # Ollama reports where the time went (nanoseconds)
                                 ns = lambda k: int(data.get(k, 0) or 0) // 1_000_000
                                 self.last_stats = {
@@ -315,6 +367,23 @@ class LLMEngine:
     # is a swap; two swaps → `thrashing`: one model for the rest of the run.
     SWAP_MS = 700
 
+    def thinks(self, model: str, intent: str) -> bool:
+        """Think it through first? Setting on, a hard question, a model that can,
+        full power, and the graphics card not already swapping models."""
+        return (bool(getattr(self.config, "think_hard", False)) and intent in LONG_INTENTS
+                and intent != "emergency" and bool(_thinking_off(model))
+                and not getattr(self.config, "low_power_active", False)
+                and not getattr(self, "thrashing", False))
+
+    def reply_tokens(self, intent: str = "") -> int:
+        """How long a reply may be: longer for steps and explanations,
+        shorter in low-power mode (each word costs more on a processor)."""
+        base = int(getattr(self.config, "max_tokens", 300) or 300)
+        low = getattr(self.config, "low_power_active", False)
+        if intent in LONG_INTENTS:
+            return min(max(base, 650), 450) if low else max(base, 650)
+        return min(base, 220) if low else base
+
     def _note_load(self, model: str, load_ms: int):
         seen = self.__dict__.setdefault("_loaded_once", set())
         if model in seen and load_ms > self.SWAP_MS:
@@ -331,16 +400,21 @@ class LLMEngine:
         Low temperature — factual compression, not creative.
         """
         try:
+            # The librarian, unless the card can't hold both models (then the
+            # speaker, already loaded — no swap just for a summary)
+            model = (self.config.speaker_model if getattr(self, "thrashing", False)
+                     else self.config.librarian_model or self.config.fast_model)
             payload = {
-                "model": self.config.librarian_model or self.config.fast_model,
+                "model": model,
+                **_thinking_off(model),
                 "messages": [{
                     "role": "user",
                     "content": (
-                        "Summarize this conversation in 4-6 sentences. "
-                        "Preserve all important facts, decisions made, "
-                        "current situation and any critical information. "
-                        "Be concise but complete:\n\n"
-                        + conversation_text
+                        "Summarise this conversation as notes for yourself, so you can carry on "
+                        "with it later. Keep every name, number and place; what they said about "
+                        "themselves and their situation; what was answered or decided; and what "
+                        "they were asking about last. 4-6 short lines of plain facts, no comments:"
+                        "\n\n" + conversation_text
                     )
                 }],
                 "stream": False,
@@ -360,7 +434,7 @@ class LLMEngine:
             )
 
             if r.status_code == 200:
-                return r.json()["message"]["content"]
+                return strip_thinking(r.json()["message"]["content"])
 
         except Exception:
             pass
@@ -382,35 +456,29 @@ class LLMEngine:
         Order matters for 3B models — most important context goes last,
         closest to where the model actually generates from.
         """
-        parts = [tab_system]
+        # Order: the rules, then how to answer, then about them, then the
+        # library LAST — right before their message, where a small model
+        # pays most attention. Plain headings: ALL-CAPS ones were repeated
+        # back in replies.
+        parts = [tab_system] if tab_system else []
 
-        # Behavioural constraints next — anchors everything that follows
         if llm_bounds:
-            parts.append(f"\n\nBEHAVIOURAL CONSTRAINTS:\n{llm_bounds}")
+            parts.append(llm_bounds.strip())
 
-        # Retrieved knowledge — the primary content to work from
-        if knowledge_context:
-            parts.append(
-                f"\n\nRetrieved knowledge — use as primary source:\n"
-                f"{knowledge_context}"
-            )
-
-        # Source confidence guidance
-        if confidence_note:
-            parts.append(f"\n\nSource guidance:\n{confidence_note}")
-
-        # User situation — injected close to generation point
-        if user_context and user_context != "No user context yet.":
-            parts.append(f"\n\nUser situation:\n{user_context}")
-
-        # Response governance — last thing model reads before generating
         if decision_addendum:
-            parts.append(f"\n\nRESPONSE GUIDANCE:\n{decision_addendum}")
+            parts.append("How to answer:\n" + decision_addendum.strip())
+
+        if user_context and user_context.strip() not in ("No user context yet.", "Day: 1"):
+            parts.append("About them:\n" + user_context.strip())
+
+        if confidence_note:
+            parts.append(confidence_note.strip())
+
+        if knowledge_context:
+            parts.append("From the library (answer from this):\n" + knowledge_context.strip())
 
         if not decision_addendum and not llm_bounds:
-            parts.append(
-                "\n\nBe concise. Match length to what's needed. "
-                "Speak naturally. When uncertain, say so."
-            )
+            parts.append("Be concise. Match length to what's needed. "
+                         "Speak naturally. When uncertain, say so.")
 
-        return "\n".join(parts)
+        return "\n\n".join(parts)

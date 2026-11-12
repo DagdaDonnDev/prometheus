@@ -13,7 +13,8 @@ in the RIGHT order from the start.
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional
+import re
+from typing import Dict, List, Optional
 from enum import Enum
 
 
@@ -237,6 +238,19 @@ def is_crisis(query: str) -> bool:
     return any(p in q for p in CRISIS_PATTERNS)
 
 
+_PATTERN_CACHE: Dict[str, "re.Pattern"] = {}
+
+
+def _pattern_re(pattern: str):
+    """Match at a word start; very short words (≤3 letters) must be whole."""
+    rx = _PATTERN_CACHE.get(pattern)
+    if rx is None:
+        tail = r"(?![a-z])" if len(pattern) <= 3 and pattern[-1:].isalpha() else ""
+        rx = re.compile(r"(?<![a-z])" + re.escape(pattern) + tail)
+        _PATTERN_CACHE[pattern] = rx
+    return rx
+
+
 class IntentRouter:
     """
     Classifies query intent and builds retrieval routing plan
@@ -316,9 +330,12 @@ class IntentRouter:
         q = query.lower()
         scores = {intent: 0 for intent in Intent}
 
+        # Whole words: as plain substrings, "ill" matched "drill", "will",
+        # "still", "skill" — "how do I make a bow drill" became a diagnosis.
+        # Longer patterns may still match the start of a word ("bleed" → "bleeding").
         for intent, patterns in INTENT_PATTERNS.items():
             for pattern in patterns:
-                if pattern in q:
+                if _pattern_re(pattern).search(q):
                     scores[intent] += 1
 
         # Emergency overrides everything — even a single match
